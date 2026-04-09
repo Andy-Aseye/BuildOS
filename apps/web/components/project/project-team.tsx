@@ -6,6 +6,7 @@ import { StatusBadge } from '@/components/ui/status-badge';
 import { SectionCard } from '@/components/ui/section-card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { useAuth } from '@/lib/auth-context';
+import { toast } from 'sonner';
 
 function normalizeWhatsAppPhone(raw: string): string {
   const trimmed = raw.trim();
@@ -57,14 +58,22 @@ export function ProjectTeam({ projectId }: { projectId: string }) {
     try {
       await addMember.mutateAsync({ phone: normalized, role, ...(name.trim() ? { name: name.trim() } : {}) });
       setPhone(''); setName(''); setShowForm(false);
-    } catch (err) { setFormError(err instanceof Error ? err.message : 'Could not add member'); }
+      toast.success('Team member added');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Could not add member';
+      setFormError(msg);
+      toast.error(msg);
+    }
   }
 
   async function handleRemove(userId: string) {
     try {
       await removeMember.mutateAsync(userId);
       setConfirmRemove(null);
-    } catch { /* silent */ }
+      toast.success('Member removed');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to remove member');
+    }
   }
 
   return (

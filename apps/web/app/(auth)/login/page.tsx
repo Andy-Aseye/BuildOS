@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import { useAuth } from '@/lib/auth-context';
 import { AuthBanner } from '@/components/auth/auth-banner';
 
@@ -43,9 +44,12 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       await login(email, password);
+      toast.success('Welcome back!');
       router.replace('/');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Sign in failed');
+      const msg = err instanceof Error ? err.message : 'Sign in failed';
+      toast.error(msg);
+      setError(msg);
     } finally {
       setSubmitting(false);
     }

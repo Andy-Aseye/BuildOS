@@ -309,16 +309,17 @@ export function DashboardOverview() {
 
       {/* Stat cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard icon={<FolderIcon />} label="Total Projects" value={totalProjects} color="blue" />
-        <StatCard icon={<ZapIcon />} label="Active Projects" value={activeProjects} color="green" />
+        <StatCard icon={<FolderIcon />} label="Total Projects" value={totalProjects} color="blue" loading={loadingProjects} />
+        <StatCard icon={<ZapIcon />} label="Active Projects" value={activeProjects} color="green" loading={loadingProjects} />
         <StatCard
           icon={<AlertIcon />}
           label="Open Items"
           value={openCount}
           trend={overdueCount > 0 ? `${overdueCount} overdue` : undefined}
           color="amber"
+          loading={loadingOpenRfis}
         />
-        <StatCard icon={<UsersIcon />} label="Team Members" value={teamCount} color="slate" />
+        <StatCard icon={<UsersIcon />} label="Team Members" value={teamCount} color="slate" loading={loadingUsers} />
       </div>
 
       {/* Row 2: Status distribution + Upcoming deadlines */}

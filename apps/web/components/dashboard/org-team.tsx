@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
+import { toast } from 'sonner';
 import {
   useOrgUsers,
   useUpdateUser,
@@ -98,9 +99,12 @@ export function OrgTeam() {
           isActive: editUser.isActive,
         },
       });
+      toast.success('Member updated');
       setEditUser(null);
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Update failed');
+      const msg = err instanceof Error ? err.message : 'Update failed';
+      toast.error(msg);
+      setFormError(msg);
     }
   }
 
@@ -108,9 +112,12 @@ export function OrgTeam() {
     if (!deleteTarget) return;
     try {
       await deleteUser.mutateAsync(deleteTarget.id);
+      toast.success('Member removed');
       setDeleteTarget(null);
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Delete failed');
+      const msg = err instanceof Error ? err.message : 'Delete failed';
+      toast.error(msg);
+      setFormError(msg);
     }
   }
 
@@ -123,9 +130,12 @@ export function OrgTeam() {
         name: inviteName || undefined,
         role: inviteRole,
       });
+      toast.success('Invite created');
       setInviteLink(`${window.location.origin}/invite/${result.token}`);
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Invite failed');
+      const msg = err instanceof Error ? err.message : 'Invite failed';
+      toast.error(msg);
+      setFormError(msg);
     }
   }
 

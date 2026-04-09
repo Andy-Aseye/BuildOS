@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import { useCreateProject } from '@/lib/hooks/use-project-queries';
 import { SectionCard } from '@/components/ui/section-card';
 
@@ -35,9 +36,12 @@ export function CreateProjectForm() {
         ...(startDate ? { startDate: `${startDate}T12:00:00.000Z` } : {}),
         ...(expectedEndDate ? { expectedEndDate: `${expectedEndDate}T12:00:00.000Z` } : {}),
       });
+      toast.success('Project created successfully');
       router.push(`/projects/${res.id}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not create project');
+      const msg = err instanceof Error ? err.message : 'Could not create project';
+      toast.error(msg);
+      setError(msg);
     }
   }
 

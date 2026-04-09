@@ -17,6 +17,7 @@ import { Pagination } from '@/components/ui/pagination';
 import { usePagination } from '@/lib/hooks/use-pagination';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
 import { SkeletonSectionCard, SkeletonCards } from '@/components/ui/skeleton';
+import { toast } from 'sonner';
 
 const STATUSES = [
   'DRAFT',
@@ -63,8 +64,11 @@ export function ProjectDrawings({ projectId }: { projectId: string }) {
       });
       setTitle('');
       setDescription('');
+      toast.success('Drawing package created');
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Could not create drawing package');
+      const msg = err instanceof Error ? err.message : 'Could not create drawing package';
+      setFormError(msg);
+      toast.error(msg);
     }
   }
 
@@ -79,8 +83,11 @@ export function ProjectDrawings({ projectId }: { projectId: string }) {
         },
       });
       setEditId(null);
+      toast.success('Drawing updated');
     } catch (err) {
-      setEditError(err instanceof Error ? err.message : 'Update failed');
+      const msg = err instanceof Error ? err.message : 'Update failed';
+      setEditError(msg);
+      toast.error(msg);
     }
   }
 
@@ -97,8 +104,11 @@ export function ProjectDrawings({ projectId }: { projectId: string }) {
       });
       if (input) input.value = '';
       setRevComments((m) => ({ ...m, [drawingId]: '' }));
+      toast.success('Revision uploaded');
     } catch (err) {
-      setEditError(err instanceof Error ? err.message : 'Upload failed');
+      const msg = err instanceof Error ? err.message : 'Upload failed';
+      setEditError(msg);
+      toast.error(msg);
     }
   }
 

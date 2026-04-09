@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useProject, useUpdateProject } from '@/lib/hooks/use-project-queries';
 import { api } from '@/lib/api-client';
@@ -19,8 +20,12 @@ export function EditProjectForm({ projectId }: { projectId: string }) {
   const deleteProject = useMutation({
     mutationFn: () => api.delete(`/projects/${projectId}`),
     onSuccess: () => {
+      toast.success('Project archived');
       void qc.invalidateQueries({ queryKey: ['projects'] });
       router.push('/projects');
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : 'Archive failed');
     },
   });
 
@@ -68,9 +73,12 @@ export function EditProjectForm({ projectId }: { projectId: string }) {
         ...(expectedEndDate ? { expectedEndDate: `${expectedEndDate}T12:00:00.000Z` } : {}),
         ...(actualEndDate ? { actualEndDate: `${actualEndDate}T12:00:00.000Z` } : {}),
       });
+      toast.success('Project updated');
       router.push(`/projects/${projectId}`);
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Update failed');
+      const msg = err instanceof Error ? err.message : 'Update failed';
+      toast.error(msg);
+      setFormError(msg);
     }
   }
 
