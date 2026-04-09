@@ -4,7 +4,7 @@ WORKDIR /app
 FROM base AS deps
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/
-COPY packages/ packages/
+COPY packages/shared/package.json packages/shared/
 RUN npm ci --workspace=@buildos/api --include-workspace-root
 
 FROM base AS build
