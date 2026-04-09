@@ -11,8 +11,6 @@ FROM base AS build
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/node_modules node_modules
 COPY --from=deps /app/apps/web/node_modules apps/web/node_modules
-ARG RAILWAY_GIT_COMMIT_SHA
-RUN echo "build:${RAILWAY_GIT_COMMIT_SHA}" > /tmp/.buildstamp
 COPY . .
 RUN npm run build --workspace=@buildos/web
 
