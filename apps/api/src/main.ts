@@ -14,10 +14,20 @@ async function bootstrap() {
   app.use(helmet());
 
   app.enableCors({
-    origin: env.FRONTEND_URL,
+    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+      const allowed = [
+        env.FRONTEND_URL,
+        'http://localhost:3000',
+      ];
+      if (!origin || allowed.includes(origin) || /\.vercel\.app$/.test(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error(`CORS blocked: ${origin}`));
+      }
+    },
     credentials: true,
   });
-
+  
   app.useGlobalFilters(new GlobalExceptionFilter());
   app.useGlobalPipes(
     new ValidationPipe({
