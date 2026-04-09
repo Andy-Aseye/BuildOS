@@ -19,6 +19,7 @@ import { LoadingSpinner } from '@/components/ui/loading-spinner';
 import { SkeletonSectionCard, SkeletonCards } from '@/components/ui/skeleton';
 import { CsvImportButton } from './csv-import-button';
 import { useImportMaterials } from '@/lib/hooks/use-project-queries';
+import { toast } from 'sonner';
 
 const STATUS_OPTIONS = [
   'DRAFT',
@@ -87,8 +88,11 @@ export function ProjectMaterials({ projectId }: { projectId: string }) {
       setNotes('');
       setRequiresOwnerApproval(false);
       setLines([emptyLine()]);
+      toast.success('Materials request created');
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Could not create request');
+      const msg = err instanceof Error ? err.message : 'Could not create request';
+      setFormError(msg);
+      toast.error(msg);
     }
   }
 
@@ -106,8 +110,11 @@ export function ProjectMaterials({ projectId }: { projectId: string }) {
       });
       setEditId(null);
       setEditRejection('');
+      toast.success('Status updated');
     } catch (err) {
-      setEditError(err instanceof Error ? err.message : 'Update failed');
+      const msg = err instanceof Error ? err.message : 'Update failed';
+      setEditError(msg);
+      toast.error(msg);
     }
   }
 
@@ -142,7 +149,7 @@ export function ProjectMaterials({ projectId }: { projectId: string }) {
             { key: 'unit', label: 'Unit (e.g. bags, pcs)', required: true },
             { key: 'estimatedUnitCost', label: 'Unit Cost' },
           ]}
-          onImport={async (rows) => { await importMaterials.mutateAsync({ rows }); }}
+          onImport={async (rows) => { await importMaterials.mutateAsync({ rows }); toast.success('Materials imported'); }}
         />
       </div>
       <SectionCard title="New materials request">
@@ -335,7 +342,7 @@ export function ProjectMaterials({ projectId }: { projectId: string }) {
                               requestId: m.id,
                               itemId: it.id,
                               deliveredQuantity: n,
-                            });
+                            }).then(() => toast.success('Delivery recorded')).catch((err: unknown) => toast.error(err instanceof Error ? err.message : 'Failed to record delivery'));
                           }}
                         >
                           Record

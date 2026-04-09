@@ -14,6 +14,10 @@ export class WhatsAppWebhookService {
   verifySignature(rawBody: Buffer, signatureHeader: string | undefined): boolean {
     const secret = env.WHATSAPP_APP_SECRET;
     if (!secret) {
+      if (env.NODE_ENV === 'production') {
+        this.logger.error('WHATSAPP_APP_SECRET not set — rejecting webhook in production');
+        return false;
+      }
       this.logger.warn('WHATSAPP_APP_SECRET not set — skipping signature verification (dev only)');
       return true;
     }

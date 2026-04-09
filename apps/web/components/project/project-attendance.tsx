@@ -14,6 +14,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Pagination } from '@/components/ui/pagination';
 import { SkeletonCards, SkeletonSectionCard } from '@/components/ui/skeleton';
 import { CsvImportButton } from './csv-import-button';
+import { toast } from 'sonner';
 
 export function ProjectAttendance({ projectId }: { projectId: string }) {
   const { data: logs, isLoading: loadingLogs, error } = useAttendanceLogs(projectId);
@@ -47,8 +48,11 @@ export function ProjectAttendance({ projectId }: { projectId: string }) {
     try {
       await createAttendance.mutateAsync({ workerCount: count, logDate });
       resetForm();
+      toast.success('Attendance logged');
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Failed to log attendance');
+      const msg = err instanceof Error ? err.message : 'Failed to log attendance';
+      setFormError(msg);
+      toast.error(msg);
     }
   }
 
@@ -125,7 +129,7 @@ export function ProjectAttendance({ projectId }: { projectId: string }) {
               { key: 'logDate', label: 'Date (YYYY-MM-DD)', required: true },
               { key: 'workerCount', label: 'Worker Count', required: true },
             ]}
-            onImport={async (rows) => { await importAttendance.mutateAsync(rows); }}
+            onImport={async (rows) => { await importAttendance.mutateAsync(rows); toast.success('Attendance data imported'); }}
           />
           <button
             type="button"

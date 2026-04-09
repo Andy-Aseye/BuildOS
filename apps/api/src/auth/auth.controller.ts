@@ -1,4 +1,5 @@
 import { Controller, Post, Get, Body, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { IsEmail, IsString, MinLength } from 'class-validator';
 import { AuthService } from './auth.service';
 import { AuthGuard } from '../common/guards/auth.guard';
@@ -52,11 +53,13 @@ export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
   @Post('register')
+  @Throttle([{ ttl: 60_000, limit: 5 }])
   register(@Body() body: RegisterDto) {
     return this.auth.register(body);
   }
 
   @Post('login')
+  @Throttle([{ ttl: 60_000, limit: 10 }])
   login(@Body() body: LoginDto) {
     return this.auth.login(body);
   }

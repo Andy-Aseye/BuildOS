@@ -18,6 +18,7 @@ import { StatCard } from '@/components/ui/stat-card';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
 import { SkeletonStatCards, SkeletonSectionCard, SkeletonTable } from '@/components/ui/skeleton';
+import { toast } from 'sonner';
 
 const STATUSES = ['OPEN', 'ACKNOWLEDGED', 'ANSWERED', 'CLOSED'] as const;
 
@@ -102,8 +103,11 @@ export function ProjectRfis({ projectId }: { projectId: string }) {
       setDueDate('');
       setAssignedToId('');
       setLinkedDrawingId('');
+      toast.success('RFI created');
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Could not create RFI');
+      const msg = err instanceof Error ? err.message : 'Could not create RFI';
+      setFormError(msg);
+      toast.error(msg);
     }
   }
 
@@ -118,8 +122,11 @@ export function ProjectRfis({ projectId }: { projectId: string }) {
         },
       });
       setEditId(null);
+      toast.success('RFI updated');
     } catch (err) {
-      setEditError(err instanceof Error ? err.message : 'Update failed');
+      const msg = err instanceof Error ? err.message : 'Update failed';
+      setEditError(msg);
+      toast.error(msg);
     }
   }
 

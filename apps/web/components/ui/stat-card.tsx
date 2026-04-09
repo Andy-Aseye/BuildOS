@@ -6,6 +6,7 @@ interface StatCardProps {
   value: string | number;
   trend?: string;
   color?: 'blue' | 'green' | 'amber' | 'red' | 'slate';
+  loading?: boolean;
   onClick?: () => void;
 }
 
@@ -17,7 +18,7 @@ const iconBg: Record<string, string> = {
   slate: 'bg-slate-100 text-slate-600',
 };
 
-export function StatCard({ icon, label, value, trend, color = 'blue', onClick }: StatCardProps) {
+export function StatCard({ icon, label, value, trend, color = 'blue', loading, onClick }: StatCardProps) {
   const Tag = onClick ? 'button' : 'div';
   return (
     <Tag
@@ -30,8 +31,19 @@ export function StatCard({ icon, label, value, trend, color = 'blue', onClick }:
       </div>
       <div className="min-w-0">
         <p className="text-xs font-medium text-[var(--text-muted)] mb-1">{label}</p>
-        <p className="text-2xl font-bold text-[var(--text-primary)] leading-none">{value}</p>
-        {trend && <p className="text-xs text-[var(--text-muted)] mt-1">{trend}</p>}
+        {loading ? (
+          <div className="flex items-center gap-2 h-8">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" className="animate-spin text-slate-400">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" className="opacity-20" />
+              <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+            </svg>
+          </div>
+        ) : (
+          <>
+            <p className="text-2xl font-bold text-[var(--text-primary)] leading-none">{value}</p>
+            {trend && <p className="text-xs text-[var(--text-muted)] mt-1">{trend}</p>}
+          </>
+        )}
       </div>
     </Tag>
   );

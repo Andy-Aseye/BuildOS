@@ -10,6 +10,7 @@ import { StatusBadge } from '@/components/ui/status-badge';
 import { Pagination } from '@/components/ui/pagination';
 import { SkeletonTable } from '@/components/ui/skeleton';
 import { usePagination } from '@/lib/hooks/use-pagination';
+import { toast } from 'sonner';
 
 const FOLDERS = ['DRAWINGS', 'CONTRACTS', 'PERMITS', 'REPORTS', 'OTHER'] as const;
 
@@ -45,8 +46,11 @@ export function ProjectFiles({ projectId }: { projectId: string }) {
     try {
       await upload.mutateAsync({ file: files[0], folder });
       if (fileRef.current) fileRef.current.value = '';
+      toast.success('File uploaded');
     } catch (err) {
-      setUploadError(err instanceof Error ? err.message : 'Upload failed');
+      const msg = err instanceof Error ? err.message : 'Upload failed';
+      setUploadError(msg);
+      toast.error(msg);
     }
   }
 
@@ -135,7 +139,7 @@ export function ProjectFiles({ projectId }: { projectId: string }) {
                     <td className="px-5 py-3.5 whitespace-nowrap text-[var(--text-muted)]">{formatSize(f.fileSize)}</td>
                     <td className="px-5 py-3.5 whitespace-nowrap text-[var(--text-muted)]">{formatDate(f.createdAt)}</td>
                     <td className="px-5 py-3.5">
-                      <button type="button" disabled={remove.isPending} onClick={() => void remove.mutateAsync(f.id)} className="text-xs font-medium text-red-600 hover:underline disabled:opacity-50">Delete</button>
+                      <button type="button" disabled={remove.isPending} onClick={() => void remove.mutateAsync(f.id).then(() => toast.success('File deleted')).catch((err) => toast.error(err instanceof Error ? err.message : 'Delete failed'))} className="text-xs font-medium text-red-600 hover:underline disabled:opacity-50">Delete</button>
                     </td>
                   </tr>
                 ))}
