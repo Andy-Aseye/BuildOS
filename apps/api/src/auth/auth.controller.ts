@@ -53,13 +53,13 @@ export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
   @Post('register')
-  @Throttle([{ ttl: 60_000, limit: 5 }])
+  @Throttle({ default: { ttl: 60_000, limit: 5 } })
   register(@Body() body: RegisterDto) {
     return this.auth.register(body);
   }
 
   @Post('login')
-  @Throttle([{ ttl: 60_000, limit: 10 }])
+  @Throttle({ default: { ttl: 60_000, limit: 10 } })
   login(@Body() body: LoginDto) {
     return this.auth.login(body);
   }

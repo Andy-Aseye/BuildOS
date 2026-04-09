@@ -85,7 +85,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const sessionTimeoutId = window.setTimeout(logout, sessionEnd - now);
 
     const exp = getTokenExpiry(token);
-    let refreshTimeoutId: ReturnType<typeof setTimeout> | undefined;
+    let refreshTimeoutId: number | undefined;
 
     if (exp) {
       const refreshAt = exp - REFRESH_BUFFER_MS;
