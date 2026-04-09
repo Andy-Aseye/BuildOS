@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import { toast } from 'sonner';
 import { useValidateInvite } from '@/lib/hooks/use-project-queries';
 import { api, setAccessToken, setRefreshToken, setSessionStart, type RegisterResponse } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-context';
@@ -49,9 +50,12 @@ export default function AcceptInvitePage() {
       setRefreshToken(res.refreshToken);
       setSessionStart(Date.now());
       await refreshUser();
+      toast.success('Welcome to the team!');
       router.replace('/');
     } catch (err) {
-      setSubmitError(err instanceof Error ? err.message : 'Something went wrong');
+      const msg = err instanceof Error ? err.message : 'Something went wrong';
+      toast.error(msg);
+      setSubmitError(msg);
     } finally {
       setSubmitting(false);
     }

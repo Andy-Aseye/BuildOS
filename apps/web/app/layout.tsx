@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { Montserrat } from 'next/font/google';
+import { Toaster } from 'sonner';
 import { AuthProvider } from '@/lib/auth-context';
 import { QueryProvider } from '@/lib/query-provider';
 import './globals.css';
@@ -22,6 +23,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <QueryProvider>
           <AuthProvider>{children}</AuthProvider>
         </QueryProvider>
+        <Toaster position="top-right" richColors closeButton duration={4000} />
       </body>
     </html>
   );

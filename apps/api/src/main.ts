@@ -1,5 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
+import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { GlobalExceptionFilter } from './common/filters/http-exception.filter';
 import { env } from './config/env';
@@ -9,6 +10,8 @@ async function bootstrap() {
     rawBody: true,
   });
   const logger = new Logger('Bootstrap');
+
+  app.use(helmet());
 
   app.enableCors({
     origin: env.FRONTEND_URL,

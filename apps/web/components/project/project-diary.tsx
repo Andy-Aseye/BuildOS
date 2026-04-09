@@ -8,6 +8,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
 import { Pagination } from '@/components/ui/pagination';
 import { SkeletonCards } from '@/components/ui/skeleton';
+import { toast } from 'sonner';
 
 const WEATHER_OPTIONS = ['Sunny', 'Cloudy', 'Rainy', 'Stormy', 'Windy', 'Hot', 'Cold'] as const;
 
@@ -50,8 +51,11 @@ export function ProjectDiary({ projectId }: { projectId: string }) {
         incidents: incidents.trim() ? incidents.split('\n').map((i) => i.trim()).filter(Boolean) : undefined,
       });
       resetForm();
+      toast.success('Diary entry created');
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Failed to create entry');
+      const msg = err instanceof Error ? err.message : 'Failed to create entry';
+      setFormError(msg);
+      toast.error(msg);
     }
   }
 

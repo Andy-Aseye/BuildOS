@@ -18,6 +18,7 @@ import {
   useUpdateProgressReport,
 } from '@/lib/hooks/use-project-queries';
 import type { ClientProgressReportData } from '@/lib/pdf/client-progress-report-document';
+import { toast } from 'sonner';
 
 type Preset = '7' | '30' | 'month';
 
@@ -143,8 +144,11 @@ export function ProjectReports({ projectId }: { projectId: string }) {
       a.download = `BuildOS-${project.code}-report.pdf`;
       a.click();
       URL.revokeObjectURL(url);
+      toast.success('PDF downloaded');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not build PDF');
+      const msg = e instanceof Error ? e.message : 'Could not build PDF';
+      setError(msg);
+      toast.error(msg);
     } finally {
       setDownloading(false);
     }
@@ -171,8 +175,11 @@ export function ProjectReports({ projectId }: { projectId: string }) {
         periodEnd: built.end.toISOString(),
         narrativeSummary: summary,
       });
+      toast.success('Report saved to project');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not save report');
+      const msg = e instanceof Error ? e.message : 'Could not save report';
+      setError(msg);
+      toast.error(msg);
     } finally {
       setSaving(false);
     }
@@ -184,8 +191,11 @@ export function ProjectReports({ projectId }: { projectId: string }) {
     try {
       await updateStored.mutateAsync({ reportId, body: { sentToEmail: email } });
       setSentEmailDraft((m) => ({ ...m, [reportId]: '' }));
+      toast.success('Sent record updated');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not update');
+      const msg = e instanceof Error ? e.message : 'Could not update';
+      setError(msg);
+      toast.error(msg);
     }
   }
 
@@ -257,8 +267,11 @@ export function ProjectReports({ projectId }: { projectId: string }) {
                   periodEnd: end.toISOString(),
                 });
                 if (result.narrative) setNarrative(result.narrative);
+                toast.success('Narrative generated');
               } catch (e) {
-                setError(e instanceof Error ? e.message : 'AI narrative generation failed');
+                const msg = e instanceof Error ? e.message : 'AI narrative generation failed';
+                setError(msg);
+                toast.error(msg);
               }
             }}
             className="mt-2 px-3 py-1.5 text-sm border border-[var(--border)] rounded-xl hover:bg-[var(--content-bg)] disabled:opacity-60"

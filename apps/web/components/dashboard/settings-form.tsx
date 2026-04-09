@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { toast } from 'sonner';
 import { useCurrentTenant, useUpdateTenant } from '@/lib/hooks/use-project-queries';
 import { SectionCard } from '@/components/ui/section-card';
 import { SkeletonSectionCard } from '@/components/ui/skeleton';
@@ -29,8 +30,11 @@ export function SettingsForm() {
         ...(logoUrl.trim() ? { logoUrl: logoUrl.trim() } : { logoUrl: undefined }),
         ...(primaryColor.trim() ? { primaryColor: primaryColor.trim() } : { primaryColor: undefined }),
       });
+      toast.success('Settings saved');
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Update failed');
+      const msg = err instanceof Error ? err.message : 'Update failed';
+      toast.error(msg);
+      setFormError(msg);
     }
   }
 
