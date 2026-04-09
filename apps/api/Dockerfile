@@ -5,7 +5,7 @@ FROM base AS deps
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/
 COPY packages/ packages/
-RUN npm ci --workspace=@buildos/api --include-workspace-root
+RUN npm ci --workspace=api --include-workspace-root
 
 FROM base AS build
 COPY --from=deps /app/node_modules node_modules
@@ -14,7 +14,7 @@ ARG RAILWAY_GIT_COMMIT_SHA
 RUN echo "build:${RAILWAY_GIT_COMMIT_SHA}" > /tmp/.buildstamp
 COPY . .
 RUN npx prisma generate --schema=apps/api/prisma/schema.prisma
-RUN npm run build --workspace=@buildos/api
+RUN npm run build --workspace=api
 
 FROM base AS runner
 ENV NODE_ENV=production
