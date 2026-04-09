@@ -3,7 +3,7 @@ WORKDIR /app
 
 FROM base AS deps
 COPY package.json package-lock.json ./
-COPY apps/api/package.json apps/api/
+COPY apps/ apps/
 COPY packages/ packages/
 RUN npm ci --workspace=api --include-workspace-root
 
