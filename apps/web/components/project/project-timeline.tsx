@@ -15,6 +15,7 @@ import { LoadingSpinner } from '@/components/ui/loading-spinner';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { SkeletonCards, SkeletonSectionCard } from '@/components/ui/skeleton';
+import { toast } from 'sonner';
 
 const STATUSES = ['NOT_STARTED', 'IN_PROGRESS', 'AT_RISK', 'DELAYED', 'COMPLETED'] as const;
 
@@ -78,8 +79,11 @@ function PhaseBlock({
         },
       });
       setEditing(false);
+      toast.success('Phase updated');
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Update failed');
+      const msg = e instanceof Error ? e.message : 'Update failed';
+      setErr(msg);
+      toast.error(msg);
     }
   }
 
@@ -88,8 +92,11 @@ function PhaseBlock({
     setErr(null);
     try {
       await del.mutateAsync(phase.id);
+      toast.success('Phase removed');
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Delete failed');
+      const msg = e instanceof Error ? e.message : 'Delete failed';
+      setErr(msg);
+      toast.error(msg);
     }
   }
 
@@ -294,8 +301,11 @@ function AddPhaseForm({ projectId, nextOrder }: { projectId: string; nextOrder: 
       setPlannedStart('');
       setPlannedEnd('');
       setNotes('');
+      toast.success('Phase added');
     } catch (e2) {
-      setErr(e2 instanceof Error ? e2.message : 'Could not add phase');
+      const msg = e2 instanceof Error ? e2.message : 'Could not add phase';
+      setErr(msg);
+      toast.error(msg);
     }
   }
 

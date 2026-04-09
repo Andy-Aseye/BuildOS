@@ -17,6 +17,7 @@ import { usePagination } from '@/lib/hooks/use-pagination';
 import { Pagination } from '@/components/ui/pagination';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
 import { SkeletonStatCards, SkeletonSectionCard, SkeletonCards } from '@/components/ui/skeleton';
+import { toast } from 'sonner';
 
 const CAUSES = [
   'WEATHER',
@@ -127,8 +128,11 @@ export function ProjectDelays({ projectId }: { projectId: string }) {
       });
       setDescription('');
       setLinkedRFIId('');
+      toast.success('Delay logged');
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Could not log delay');
+      const msg = err instanceof Error ? err.message : 'Could not log delay';
+      setFormError(msg);
+      toast.error(msg);
     }
   }
 
@@ -143,8 +147,11 @@ export function ProjectDelays({ projectId }: { projectId: string }) {
         },
       });
       setEditId(null);
+      toast.success('Review saved');
     } catch (err) {
-      setEditError(err instanceof Error ? err.message : 'Update failed');
+      const msg = err instanceof Error ? err.message : 'Update failed';
+      setEditError(msg);
+      toast.error(msg);
     }
   }
 

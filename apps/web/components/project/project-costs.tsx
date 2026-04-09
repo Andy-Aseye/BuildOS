@@ -23,6 +23,7 @@ import { LoadingSpinner } from '@/components/ui/loading-spinner';
 import { SkeletonStatCards, SkeletonTable } from '@/components/ui/skeleton';
 import { CsvImportButton } from './csv-import-button';
 import { useImportCosts } from '@/lib/hooks/use-project-queries';
+import { toast } from 'sonner';
 
 function DollarIcon() {
   return (
@@ -65,8 +66,11 @@ function ManualCostForm({ projectId }: { projectId: string }) {
       setAmount('');
       setFxRateAtEntry('');
       setOpen(false);
+      toast.success('Cost added');
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Could not add cost');
+      const msg = err instanceof Error ? err.message : 'Could not add cost';
+      setFormError(msg);
+      toast.error(msg);
     }
   }
 
@@ -146,12 +150,22 @@ export function ProjectCosts({ projectId }: { projectId: string }) {
 
   async function confirm(costId: string) {
     setBusyId(costId);
-    try { await updateStatus.mutateAsync({ costId, status: 'CONFIRMED' }); } finally { setBusyId(null); }
+    try {
+      await updateStatus.mutateAsync({ costId, status: 'CONFIRMED' });
+      toast.success('Cost confirmed');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not confirm cost');
+    } finally { setBusyId(null); }
   }
   async function reject(costId: string) {
     const reason = window.prompt('Rejection reason (optional)') ?? undefined;
     setBusyId(costId);
-    try { await updateStatus.mutateAsync({ costId, status: 'REJECTED', ...(reason ? { rejectionReason: reason } : {}) }); } finally { setBusyId(null); }
+    try {
+      await updateStatus.mutateAsync({ costId, status: 'REJECTED', ...(reason ? { rejectionReason: reason } : {}) });
+      toast.success('Cost rejected');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not reject cost');
+    } finally { setBusyId(null); }
   }
 
   if (!allowed) {
@@ -197,7 +211,10 @@ export function ProjectCosts({ projectId }: { projectId: string }) {
             { key: 'amount', label: 'Amount', required: true },
             { key: 'entryDate', label: 'Date (YYYY-MM-DD)' },
           ]}
-          onImport={async (rows) => { await importCosts.mutateAsync(rows); }}
+          onImport={async (rows) => {
+            await importCosts.mutateAsync(rows);
+            toast.success('Costs imported');
+          }}
         />
       </div>
 

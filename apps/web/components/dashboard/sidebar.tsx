@@ -250,30 +250,29 @@ export function Sidebar({ open, onClose }: SidebarProps) {
       {/* Spacer */}
       <div className="flex-1" />
 
-      {/* Download Mobile App Card */}
+      {/* Need Help Card */}
       <div className="px-4 pb-5">
         <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-[#1e3a5f] to-[#0f1b2d] p-5">
           <div className="absolute top-3 left-4">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-              <circle cx="9" cy="7" r="4" />
-              <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-              <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+              <circle cx="12" cy="12" r="10" />
+              <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
             </svg>
           </div>
           <div className="mt-6">
             <p className="text-white font-semibold text-sm leading-tight">
-              Download <span className="font-normal text-slate-300">our</span>
+              Need <span className="font-normal text-slate-300">any</span>
             </p>
-            <p className="text-white font-semibold text-sm">Mobile App</p>
-            <p className="text-slate-400 text-xs mt-1">Get easy in another way</p>
+            <p className="text-white font-semibold text-sm">Help?</p>
+            <p className="text-slate-400 text-xs mt-1">We&apos;re here to support you</p>
           </div>
-          <button
-            type="button"
-            className="mt-4 w-full py-2 rounded-full bg-[var(--primary)] text-white text-sm font-semibold hover:bg-[var(--primary-hover)] transition-colors"
+          <a
+            href="mailto:support@buildwit.io"
+            className="mt-4 w-full py-2 rounded-full bg-[var(--primary)] text-white text-sm font-semibold hover:bg-[var(--primary-hover)] transition-colors block text-center"
           >
-            Download
-          </button>
+            Contact Support
+          </a>
           <div className="absolute -bottom-6 -right-6 w-24 h-24 rounded-full border border-white/10" />
           <div className="absolute -bottom-3 -right-3 w-16 h-16 rounded-full border border-white/10" />
         </div>

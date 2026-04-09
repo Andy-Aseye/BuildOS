@@ -35,6 +35,40 @@ export class AiQueryService {
 
   constructor(private readonly prisma: PrismaService) {}
 
+  private validateAndSanitizeSql(sql: string): string {
+    const upper = sql.toUpperCase();
+
+    const forbidden = [
+      'INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'TRUNCATE',
+      'CREATE', 'GRANT', 'REVOKE', 'COPY', 'EXECUTE', 'DO ',
+      'CALL', 'SET ', 'RESET', 'LISTEN', 'NOTIFY', 'PREPARE',
+      'DEALLOCATE', 'CLUSTER', 'COMMENT', 'LOCK', 'VACUUM',
+    ];
+
+    for (const kw of forbidden) {
+      const pattern = new RegExp(`\\b${kw.trim()}\\b`);
+      if (pattern.test(upper)) {
+        throw new BadRequestException(`Forbidden SQL keyword: ${kw.trim()}`);
+      }
+    }
+
+    if (!upper.startsWith('SELECT')) {
+      throw new BadRequestException('Only SELECT queries are allowed');
+    }
+
+    if (/;\s*\S/.test(sql)) {
+      throw new BadRequestException('Multiple SQL statements are not allowed');
+    }
+
+    sql = sql.replace(/;\s*$/, '');
+
+    if (!sql.includes('$1')) {
+      throw new BadRequestException('Query must filter by tenant_id ($1 parameter)');
+    }
+
+    return sql;
+  }
+
   async query(
     tenantId: string,
     question: string,
@@ -65,23 +99,16 @@ export class AiQueryService {
     let sql = (sqlCompletion.choices[0]?.message?.content ?? '').trim();
     sql = sql.replace(/^```\w*\n?/m, '').replace(/\n?```$/m, '').trim();
 
-    const upper = sql.toUpperCase();
-    const forbidden = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'TRUNCATE', 'CREATE', 'GRANT', 'REVOKE'];
-    for (const kw of forbidden) {
-      if (upper.includes(kw)) {
-        throw new BadRequestException('Only read-only queries are allowed');
-      }
-    }
-
-    if (!upper.startsWith('SELECT')) {
-      throw new BadRequestException('Only SELECT queries are allowed');
-    }
+    sql = this.validateAndSanitizeSql(sql);
 
     let rows: unknown[] = [];
     let queryError: string | null = null;
 
     try {
-      const result = await this.prisma.$queryRawUnsafe(sql, tenantId);
+      const result = await this.prisma.$queryRawUnsafe(
+        `SELECT * FROM (${sql}) AS _ai_result LIMIT 200`,
+        tenantId,
+      );
       rows = Array.isArray(result) ? result : [];
     } catch (err) {
       this.logger.warn(`AI query SQL error: ${err}`);
