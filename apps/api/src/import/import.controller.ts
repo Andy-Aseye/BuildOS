@@ -11,7 +11,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 class ImportRowsDto {
   @IsArray()
   @ArrayMaxSize(5_000)
-  rows: Record<string, unknown>[];
+  rows: any[];
 }
 
 class ImportMaterialsDto extends ImportRowsDto {
