@@ -1,0 +1,607 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ── Tenants ──────────────────────────────────────────────
+
+model Tenant {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name         String
+  slug         String    @unique
+  logoUrl      String?
+  primaryColor String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  deletedAt    DateTime?
+
+  users             User[]
+  projects          Project[]
+  whatsappMessages  WhatsappMessage[]
+  auditLogs         AuditLog[]
+  invites           Invite[]
+
+  @@map("tenants")
+}
+
+// ── Users ────────────────────────────────────────────────
+
+model User {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId      String    @db.Uuid
+  tenant        Tenant    @relation(fields: [tenantId], references: [id])
+  email         String?   @unique
+  whatsappPhone String?   @unique
+  name          String?
+  role          UserRole  @default(FIELD_WORKER)
+  isActive      Boolean   @default(true)
+  lastActiveAt  DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  projectMembers     ProjectMember[]
+  costEntries          CostEntry[] @relation("CostLoggedBy")
+  confirmedCostEntries CostEntry[] @relation("CostConfirmedBy")
+  dailyLogs          DailyLog[]
+  attendanceLogs     AttendanceLog[]
+  uploadedFiles      ProjectFile[]
+  whatsappMessages   WhatsappMessage[]
+  submittedDrawings  DrawingReview[]      @relation("DrawingSubmitter")
+  reviewedDrawings   DrawingReview[]      @relation("DrawingReviewer")
+  uploadedRevisions  DrawingRevision[]
+  raisedRFIs         RFI[]               @relation("RFIRaiser")
+  assignedRFIs       RFI[]               @relation("RFIRespondent")
+  materialsRequests  MaterialsRequest[]   @relation("MaterialsRequester")
+  materialsApprovals MaterialsRequest[]   @relation("MaterialsApprover")
+  reportedDelays     DelayLog[]
+  sentInvites        Invite[]  @relation("InvitedBy")
+  notifications      Notification[]
+
+  @@map("users")
+}
+
+enum UserRole {
+  OWNER
+  PROJECT_MANAGER
+  ARCHITECT
+  FOREMAN
+  FIELD_WORKER
+}
+
+// ── Projects ─────────────────────────────────────────────
+
+model Project {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId        String        @db.Uuid
+  tenant          Tenant        @relation(fields: [tenantId], references: [id])
+  code            String        @unique
+  name            String
+  clientName      String
+  description     String?
+  status          ProjectStatus @default(ACTIVE)
+  budgetGhs       Decimal?      @db.Decimal(15, 2)
+  budgetUsd       Decimal?      @db.Decimal(15, 2)
+  fxRateGhsUsd    Decimal?      @db.Decimal(10, 4)
+  startDate       DateTime?
+  expectedEndDate DateTime?
+  actualEndDate   DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  deletedAt       DateTime?
+
+  members           ProjectMember[]
+  phases            ProjectPhase[]
+  costEntries       CostEntry[]
+  dailyLogs         DailyLog[]
+  attendanceLogs    AttendanceLog[]
+  files             ProjectFile[]
+  whatsappMessages  WhatsappMessage[]
+  progressReports   ProgressReport[]
+  drawingReviews    DrawingReview[]
+  rfis              RFI[]
+  materialsRequests MaterialsRequest[]
+  delayLogs         DelayLog[]
+  budgetAlertState  ProjectBudgetAlertState?
+
+  @@map("projects")
+}
+
+/** Tracks last WhatsApp alert tier (0 / 75 / 90 / 100) per currency to avoid duplicate threshold spam. */
+model ProjectBudgetAlertState {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId    String   @unique @db.Uuid
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tenantId     String   @db.Uuid
+  lastGhsLevel Int      @default(0)
+  lastUsdLevel Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@map("project_budget_alert_state")
+}
+
+enum ProjectStatus {
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+model ProjectMember {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId String    @db.Uuid
+  project   Project   @relation(fields: [projectId], references: [id])
+  userId    String    @db.Uuid
+  user      User      @relation(fields: [userId], references: [id])
+  role      UserRole
+  joinedAt  DateTime  @default(now())
+  leftAt    DateTime?
+
+  @@unique([projectId, userId])
+  @@map("project_members")
+}
+
+// ── Project Phases ───────────────────────────────────────
+
+model ProjectPhase {
+  id              String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId       String      @db.Uuid
+  project         Project     @relation(fields: [projectId], references: [id])
+  name            String
+  order           Int
+  plannedStart    DateTime?
+  plannedEnd      DateTime?
+  actualStart     DateTime?
+  actualEnd       DateTime?
+  percentComplete Int         @default(0)
+  status          PhaseStatus @default(NOT_STARTED)
+  notes           String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  @@map("project_phases")
+}
+
+enum PhaseStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  AT_RISK
+  DELAYED
+  COMPLETED
+}
+
+// ── Cost Entries ─────────────────────────────────────────
+
+model CostEntry {
+  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId     String       @db.Uuid
+  project       Project      @relation(fields: [projectId], references: [id])
+  tenantId      String       @db.Uuid
+  source        CostSource
+  status        CostStatus   @default(PENDING_CONFIRMATION)
+  description   String
+  category      CostCategory
+  currency      Currency
+  amount        Decimal      @db.Decimal(15, 2)
+  fxRateAtEntry Decimal?     @db.Decimal(10, 4)
+  loggedById    String       @db.Uuid
+  loggedBy      User         @relation("CostLoggedBy", fields: [loggedById], references: [id])
+  confirmedById String?      @db.Uuid
+  confirmedBy   User?        @relation("CostConfirmedBy", fields: [confirmedById], references: [id])
+  confirmedAt   DateTime?
+  rejectionReason String?
+  rawMessageId  String?      @db.Uuid
+  entryDate     DateTime     @default(now())
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  deletedAt     DateTime?
+
+  @@map("cost_entries")
+}
+
+enum CostSource {
+  WHATSAPP_AI
+  MANUAL
+}
+
+enum CostStatus {
+  PENDING_CONFIRMATION
+  CONFIRMED
+  REJECTED
+}
+
+enum CostCategory {
+  MATERIALS
+  LABOUR
+  EQUIPMENT
+  SUBCONTRACTORS
+  TRANSPORT
+  MISCELLANEOUS
+}
+
+enum Currency {
+  GHS
+  USD
+}
+
+// ── Daily Logs ───────────────────────────────────────────
+
+model DailyLog {
+  id            String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId     String      @db.Uuid
+  project       Project     @relation(fields: [projectId], references: [id])
+  tenantId      String      @db.Uuid
+  logDate       DateTime
+  submittedById String      @db.Uuid
+  submittedBy   User        @relation(fields: [submittedById], references: [id])
+  rawContent    String
+  aiSummary     String?
+  activities    String[]
+  materials     Json?
+  incidents     String[]
+  weather       String?
+  source        MessageType
+  rawMessageId  String?     @db.Uuid
+  createdAt     DateTime    @default(now())
+
+  photos DailyLogPhoto[]
+
+  @@map("daily_logs")
+}
+
+model DailyLogPhoto {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  dailyLogId String    @db.Uuid
+  dailyLog   DailyLog  @relation(fields: [dailyLogId], references: [id])
+  storageUrl String
+  caption    String?
+  takenAt    DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@map("daily_log_photos")
+}
+
+// ── Attendance Logs ──────────────────────────────────────
+
+model AttendanceLog {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId    String    @db.Uuid
+  project      Project   @relation(fields: [projectId], references: [id])
+  tenantId     String    @db.Uuid
+  logDate      DateTime
+  workerCount  Int
+  reportedById String    @db.Uuid
+  reportedBy   User      @relation(fields: [reportedById], references: [id])
+  rawMessageId String?   @db.Uuid
+  confirmedAt  DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@map("attendance_logs")
+}
+
+// ── WhatsApp Messages ────────────────────────────────────
+
+model WhatsappMessage {
+  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId         String?          @db.Uuid
+  tenant           Tenant?          @relation(fields: [tenantId], references: [id])
+  projectId        String?          @db.Uuid
+  project          Project?         @relation(fields: [projectId], references: [id])
+  direction        MessageDirection
+  whatsappMsgId    String           @unique
+  fromPhone        String
+  toPhone          String
+  messageType      MessageType
+  textContent      String?
+  transcription    String?
+  mediaUrl         String?
+  mediaType        String?
+  processingStatus ProcessingStatus @default(PENDING)
+  classifiedAs     String?
+  extractedData    Json?
+  senderId         String?          @db.Uuid
+  sender           User?            @relation(fields: [senderId], references: [id])
+  receivedAt       DateTime
+  processedAt      DateTime?
+  createdAt        DateTime         @default(now())
+
+  @@map("whatsapp_messages")
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  VOICE_NOTE
+  DOCUMENT
+  VIDEO
+  WEB
+}
+
+// ── Invites ──────────────────────────────────────────────
+
+model Invite {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String    @db.Uuid
+  tenant      Tenant    @relation(fields: [tenantId], references: [id])
+  email       String
+  name        String?
+  role        UserRole  @default(FIELD_WORKER)
+  token       String    @unique @default(dbgenerated("gen_random_uuid()"))
+  invitedById String    @db.Uuid
+  invitedBy   User      @relation("InvitedBy", fields: [invitedById], references: [id])
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@map("invites")
+}
+
+enum ProcessingStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+// ── Project Files ────────────────────────────────────────
+
+model ProjectFile {
+  id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId    String     @db.Uuid
+  project      Project    @relation(fields: [projectId], references: [id])
+  tenantId     String     @db.Uuid
+  name         String
+  folder       FileFolder
+  storageUrl   String
+  fileSize     Int
+  mimeType     String
+  uploadedById String     @db.Uuid
+  uploadedBy   User       @relation(fields: [uploadedById], references: [id])
+  createdAt    DateTime   @default(now())
+  deletedAt    DateTime?
+
+  @@map("project_files")
+}
+
+enum FileFolder {
+  DRAWINGS
+  CONTRACTS
+  PERMITS
+  REPORTS
+  OTHER
+}
+
+// ── Progress Reports ─────────────────────────────────────
+
+model ProgressReport {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId        String   @db.Uuid
+  project          Project  @relation(fields: [projectId], references: [id])
+  tenantId         String   @db.Uuid
+  periodStart      DateTime
+  periodEnd        DateTime
+  generatedAt      DateTime @default(now())
+  generatedById    String   @db.Uuid
+  narrativeSummary String
+  storageUrl       String
+  sentToEmail      String?
+  sentAt           DateTime?
+
+  @@map("progress_reports")
+}
+
+// ── Drawing Reviews ──────────────────────────────────────
+
+model DrawingReview {
+  id            String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId     String        @db.Uuid
+  project       Project       @relation(fields: [projectId], references: [id])
+  tenantId      String        @db.Uuid
+  title         String
+  description   String?
+  status        DrawingStatus @default(DRAFT)
+  submittedById String?       @db.Uuid
+  submittedBy   User?         @relation("DrawingSubmitter", fields: [submittedById], references: [id])
+  reviewerId    String?       @db.Uuid
+  reviewer      User?         @relation("DrawingReviewer", fields: [reviewerId], references: [id])
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  revisions DrawingRevision[]
+
+  @@map("drawing_reviews")
+}
+
+enum DrawingStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  REVISION_REQUIRED
+  RESUBMITTED
+  APPROVED
+}
+
+model DrawingRevision {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  drawingReviewId String        @db.Uuid
+  drawingReview   DrawingReview @relation(fields: [drawingReviewId], references: [id])
+  revisionNumber  String
+  storageUrl      String
+  fileSize        Int
+  mimeType        String
+  uploadedById    String        @db.Uuid
+  uploadedBy      User          @relation(fields: [uploadedById], references: [id])
+  comments        String?
+  reviewedAt      DateTime?
+  reviewedById    String?       @db.Uuid
+  createdAt       DateTime      @default(now())
+
+  @@map("drawing_revisions")
+}
+
+// ── RFIs ─────────────────────────────────────────────────
+
+model RFI {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId       String    @db.Uuid
+  project         Project   @relation(fields: [projectId], references: [id])
+  tenantId        String    @db.Uuid
+  referenceNo     String
+  title           String
+  description     String
+  linkedDrawingId String?   @db.Uuid
+  status          RFIStatus @default(OPEN)
+  raisedById      String    @db.Uuid
+  raisedBy        User      @relation("RFIRaiser", fields: [raisedById], references: [id])
+  assignedToId    String?   @db.Uuid
+  assignedTo      User?     @relation("RFIRespondent", fields: [assignedToId], references: [id])
+  dueDate         DateTime
+  response        String?
+  respondedAt     DateTime?
+  closedAt        DateTime?
+  rawMessageId    String?   @db.Uuid
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@map("rfis")
+}
+
+enum RFIStatus {
+  OPEN
+  ACKNOWLEDGED
+  ANSWERED
+  CLOSED
+}
+
+// ── Materials Requests ───────────────────────────────────
+
+model MaterialsRequest {
+  id                    String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId             String                 @db.Uuid
+  project               Project                @relation(fields: [projectId], references: [id])
+  tenantId              String                 @db.Uuid
+  requestedById         String                 @db.Uuid
+  requestedBy           User                   @relation("MaterialsRequester", fields: [requestedById], references: [id])
+  status                MaterialsRequestStatus @default(DRAFT)
+  estimatedTotal        Decimal                @db.Decimal(15, 2)
+  currency              Currency               @default(GHS)
+  notes                 String?
+  requiresOwnerApproval Boolean                @default(false)
+  approvedById          String?                @db.Uuid
+  approvedBy            User?                  @relation("MaterialsApprover", fields: [approvedById], references: [id])
+  approvedAt            DateTime?
+  rejectionReason       String?
+  costEntryId           String?                @db.Uuid
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+
+  items MaterialsRequestItem[]
+
+  @@map("materials_requests")
+}
+
+enum MaterialsRequestStatus {
+  DRAFT
+  SUBMITTED
+  AWAITING_APPROVAL
+  APPROVED
+  REJECTED
+  ORDERED
+  PARTIALLY_DELIVERED
+  DELIVERED
+  CANCELLED
+}
+
+model MaterialsRequestItem {
+  id                 String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  materialsRequestId String           @db.Uuid
+  materialsRequest   MaterialsRequest @relation(fields: [materialsRequestId], references: [id])
+  description        String
+  quantity           Decimal          @db.Decimal(10, 2)
+  unit               String
+  estimatedUnitCost  Decimal?         @db.Decimal(15, 2)
+  deliveredQuantity  Decimal?         @db.Decimal(10, 2)
+  deliveredAt        DateTime?
+
+  @@map("materials_request_items")
+}
+
+// ── Delay Logs ───────────────────────────────────────────
+
+model DelayLog {
+  id                String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId         String     @db.Uuid
+  project           Project    @relation(fields: [projectId], references: [id])
+  tenantId          String     @db.Uuid
+  delayDate         DateTime
+  durationHours     Decimal    @db.Decimal(5, 2)
+  cause             DelayCause
+  description       String
+  reportedById      String     @db.Uuid
+  reportedBy        User       @relation(fields: [reportedById], references: [id])
+  reviewedByPM      Boolean    @default(false)
+  causeOverrideNote String?
+  rawMessageId      String?    @db.Uuid
+  linkedRFIId       String?    @db.Uuid
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  @@map("delay_logs")
+}
+
+enum DelayCause {
+  WEATHER
+  MATERIALS
+  LABOUR
+  DESIGN
+  CLIENT
+  UTILITIES
+  OTHER
+}
+
+// ── Notifications ────────────────────────────────────────
+
+model Notification {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId  String   @db.Uuid
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id])
+  type      String
+  title     String
+  body      String?
+  link      String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, read, createdAt(sort: Desc)])
+  @@map("notifications")
+}
+
+// ── Audit Log ────────────────────────────────────────────
+
+model AuditLog {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String   @db.Uuid
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  actorId    String?  @db.Uuid
+  action     String
+  entityType String
+  entityId   String   @db.Uuid
+  oldValues  Json?
+  newValues  Json?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@map("audit_logs")
+}

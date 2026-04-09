@@ -1,0 +1,44 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: var(--font-montserrat), ui-sans-serif, system-ui, sans-serif;
+}
+
+button,
+[role="button"],
+a,
+select,
+summary,
+[tabindex]:not([tabindex="-1"]) {
+  cursor: pointer;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+:root {
+  --sidebar-bg: #ffffff;
+  --sidebar-text: #64748b;
+  --sidebar-active: #1d4ed8;
+  --sidebar-accent: #eff6ff;
+  --content-bg: #f1f5f9;
+  --card-bg: #ffffff;
+  --border: #e2e8f0;
+  --primary: #1d4ed8;
+  --primary-hover: #1e3a8a;
+  --primary-subtle: #dbeafe;
+  --status-green: #10b981;
+  --status-green-bg: #ecfdf5;
+  --status-amber: #f59e0b;
+  --status-amber-bg: #fffbeb;
+  --status-red: #ef4444;
+  --status-red-bg: #fef2f2;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #64748b;
+}
