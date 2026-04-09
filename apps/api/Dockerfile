@@ -10,7 +10,8 @@ RUN npm ci --workspace=@buildos/api --include-workspace-root
 FROM base AS build
 COPY --from=deps /app/node_modules node_modules
 COPY --from=deps /app/apps/api/node_modules apps/api/node_modules
-ARG CACHEBUST=1
+ARG RAILWAY_GIT_COMMIT_SHA
+RUN echo "build:${RAILWAY_GIT_COMMIT_SHA}" > /tmp/.buildstamp
 COPY . .
 RUN npx prisma generate --schema=apps/api/prisma/schema.prisma
 RUN npm run build --workspace=@buildos/api
