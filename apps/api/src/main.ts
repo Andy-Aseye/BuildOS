@@ -19,7 +19,7 @@ async function bootstrap() {
         env.FRONTEND_URL,
         'http://localhost:3000',
       ];
-      if (!origin || allowed.includes(origin) || /\.vercel\.app$/.test(origin)) {
+      if (!origin || allowed.includes(origin) || /\.vercel\.app$/.test(origin) || /\.onrender\.com$/.test(origin) || /\.netlify\.app$/.test(origin)) {
         callback(null, true);
       } else {
         callback(new Error(`CORS blocked: ${origin}`));
@@ -27,7 +27,7 @@ async function bootstrap() {
     },
     credentials: true,
   });
-  
+
   app.useGlobalFilters(new GlobalExceptionFilter());
   app.useGlobalPipes(
     new ValidationPipe({

@@ -10,7 +10,10 @@ export class PgBossService implements OnModuleInit, OnModuleDestroy {
   async onModuleInit() {
     try {
       const connectionString = env.DIRECT_URL;
-      this.boss = new PgBoss({ connectionString, ssl: true });
+      this.boss = new PgBoss({
+        connectionString,
+        ssl: { rejectUnauthorized: false },
+      });
       await this.boss.start();
       this.logger.log('pg-boss started');
     } catch (err) {
