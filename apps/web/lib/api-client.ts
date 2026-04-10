@@ -63,7 +63,7 @@ function formatErrorMessage(payload: { message?: unknown }): string {
   return 'Request failed';
 }
 
-const REQUEST_TIMEOUT_MS = 15_000;
+const REQUEST_TIMEOUT_MS = 60_000;
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const { method = 'GET', body, headers = {}, skipAuth = false } = options;

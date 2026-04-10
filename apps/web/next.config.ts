@@ -1,7 +1,7 @@
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
-  /** Workspace packages only — listing `@tanstack/react-query` here can confuse server chunk splitting (missing `vendor-chunks/@tanstack.js`). */
+  output: 'standalone',
   transpilePackages: ['@buildos/shared'],
 };
 

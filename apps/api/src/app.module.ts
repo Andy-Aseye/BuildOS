@@ -23,6 +23,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { EmailModule } from './email/email.module';
 import { AiQueryModule } from './ai-query/ai-query.module';
 import { ImportModule } from './import/import.module';
+import { HealthController } from './health.controller';
 
 @Module({
   imports: [
@@ -51,5 +52,6 @@ import { ImportModule } from './import/import.module';
     AiQueryModule,
     ImportModule,
   ],
+  controllers: [HealthController],
 })
 export class AppModule {}
