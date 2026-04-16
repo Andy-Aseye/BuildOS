@@ -3,28 +3,51 @@ import OpenAI from 'openai';
 import { PrismaService } from '../prisma.module';
 import { env } from '../config/env';
 
+/** Tables that have a real tenant_id column — use ... WHERE tenant_id = $1 (and join from here). */
 const SCHEMA_CONTEXT = `
-Tables (PostgreSQL, all snake_case columns):
-- projects (id uuid, tenant_id uuid, code text, name text, client_name text, description text, status text [ACTIVE|ON_HOLD|COMPLETED|CANCELLED], budget_ghs numeric, budget_usd numeric, start_date timestamp, expected_end_date timestamp, created_at timestamp, deleted_at timestamp nullable)
-- rfis (id uuid, project_id uuid, tenant_id uuid, reference_no text, title text, description text, status text [OPEN|ACKNOWLEDGED|ANSWERED|CLOSED], due_date timestamp, response text, raised_by_id uuid, assigned_to_id uuid, responded_at timestamp, closed_at timestamp, created_at timestamp)
-- cost_entries (id uuid, project_id uuid, tenant_id uuid, description text, category text [MATERIALS|LABOUR|EQUIPMENT|SUBCONTRACTORS|TRANSPORT|MISCELLANEOUS], currency text [GHS|USD], amount numeric, status text [PENDING_CONFIRMATION|CONFIRMED|REJECTED], source text, entry_date timestamp, deleted_at timestamp nullable)
-- daily_logs (id uuid, project_id uuid, tenant_id uuid, log_date timestamp, raw_content text, ai_summary text, activities text[], incidents text[], weather text, source text, submitted_by_id uuid)
-- attendance_logs (id uuid, project_id uuid, tenant_id uuid, log_date timestamp, worker_count int, reported_by_id uuid)
-- materials_requests (id uuid, project_id uuid, tenant_id uuid, status text, estimated_total numeric, currency text, notes text, created_at timestamp)
-- materials_request_items (id uuid, materials_request_id uuid, description text, quantity numeric, unit text, estimated_unit_cost numeric, delivered_quantity numeric, delivered_at timestamp)
-- delay_logs (id uuid, project_id uuid, tenant_id uuid, delay_date timestamp, duration_hours numeric, cause text [WEATHER|MATERIALS|LABOUR|DESIGN|CLIENT|UTILITIES|OTHER], description text, reported_by_id uuid)
-- project_phases (id uuid, project_id uuid, name text, percent_complete int, status text [NOT_STARTED|IN_PROGRESS|AT_RISK|DELAYED|COMPLETED], planned_start timestamp, planned_end timestamp)
-- users (id uuid, tenant_id uuid, email text, name text, role text [OWNER|PROJECT_MANAGER|ARCHITECT|FOREMAN|FIELD_WORKER], whatsapp_phone text, is_active boolean)
-- progress_reports (id uuid, project_id uuid, tenant_id uuid, period_start timestamp, period_end timestamp, narrative_summary text, generated_at timestamp)
-- drawing_reviews (id uuid, project_id uuid, tenant_id uuid, title text, status text [DRAFT|SUBMITTED|UNDER_REVIEW|REVISION_REQUIRED|RESUBMITTED|APPROVED])
-- project_members (id uuid, project_id uuid, user_id uuid, role text)
+PostgreSQL schema (snake_case column names in the database):
+
+DIRECT tenant_id (filter with WHERE tenant_id = $1 or AND table.tenant_id = $1):
+- projects (id, tenant_id, code, name, client_name, description, status, budget_ghs, budget_usd, start_date, expected_end_date, created_at, deleted_at)
+- users (id, tenant_id, email, name, role, whatsapp_phone, is_active, deleted_at)
+- rfis (id, project_id, tenant_id, reference_no, title, description, status, due_date, response, raised_by_id, assigned_to_id, responded_at, closed_at, created_at)
+- cost_entries (id, project_id, tenant_id, description, category, currency, amount, status, source, entry_date, deleted_at)
+- daily_logs (id, project_id, tenant_id, log_date, raw_content, ai_summary, activities, incidents, weather, source, submitted_by_id)
+- attendance_logs (id, project_id, tenant_id, log_date, worker_count, reported_by_id)
+- materials_requests (id, project_id, tenant_id, status, estimated_total, currency, notes, created_at)
+- delay_logs (id, project_id, tenant_id, delay_date, duration_hours, cause, description, reported_by_id)
+- progress_reports (id, project_id, tenant_id, period_start, period_end, narrative_summary, generated_at)
+- drawing_reviews (id, project_id, tenant_id, title, status)
+- project_budget_alert_state (id, project_id, tenant_id, last_ghs_level, last_usd_level)
+
+NO tenant_id column — scope ONLY via join (do NOT write tenant_id on these tables):
+- project_members (id, project_id, user_id, role, joined_at, left_at)
+  → INNER JOIN projects p ON p.id = project_members.project_id AND p.tenant_id = $1
+- project_phases (id, project_id, name, "order", planned_start, planned_end, percent_complete, status, …)
+  → INNER JOIN projects p ON p.id = project_phases.project_id AND p.tenant_id = $1
+- materials_request_items (id, materials_request_id, description, quantity, unit, …)
+  → INNER JOIN materials_requests mr ON mr.id = materials_request_items.materials_request_id AND mr.tenant_id = $1
 
 IMPORTANT:
-- Always filter by tenant_id = $1 for data security.
-- Only generate SELECT statements. Never INSERT, UPDATE, DELETE, DROP, or ALTER.
-- Use proper joins when crossing tables. 
-- For deleted records, filter WHERE deleted_at IS NULL when the table has that column.
-- Return human-readable column aliases.
+- Every SELECT must be scoped to this tenant: use tenant_id = $1 only on tables that have it; for tables without it, join through projects or materials_requests as above.
+- Only SELECT. Never INSERT, UPDATE, DELETE, DROP, ALTER.
+- For projects and users rows, filter deleted_at IS NULL when the column exists.
+- Use clear column aliases (AS).
+`.trim();
+
+const INTENT_SYSTEM = `You route messages for BuildOS, a construction management app assistant.
+
+Decide if the user wants to query their organization's project data from the database, or if they are chatting (greeting, thanks, empty, off-topic, or not a data question).
+
+needs_sql = true when they ask about projects, costs, budgets, RFIs, delays, materials, attendance, logs, phases, team members, drawings, reports, or any question answerable from project records.
+
+needs_sql = false for greetings (hi, hey, hello), thanks, small talk, jokes, or when they give no concrete question.
+
+Respond with ONLY valid JSON (no markdown):
+{"needs_sql":boolean,"chat_message":string}
+
+When needs_sql is false, chat_message must be a short friendly reply (1-3 sentences) inviting them to ask about projects, costs, RFIs, or team data.
+When needs_sql is true, set chat_message to an empty string "".
 `.trim();
 
 type ChatMessage = { role: 'user' | 'assistant'; content: string };
@@ -69,6 +92,48 @@ export class AiQueryService {
     return sql;
   }
 
+  /** Routes greetings / small talk away from SQL generation. */
+  private async classifyIntent(
+    openai: OpenAI,
+    question: string,
+    history: ChatMessage[],
+  ): Promise<{ needsSql: boolean; chatMessage: string }> {
+    const historyMessages: OpenAI.ChatCompletionMessageParam[] = history
+      .slice(-6)
+      .map((m) => ({ role: m.role, content: m.content }));
+
+    const res = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      temperature: 0,
+      response_format: { type: 'json_object' },
+      messages: [
+        { role: 'system', content: INTENT_SYSTEM },
+        ...historyMessages,
+        { role: 'user', content: question },
+      ],
+    });
+
+    const raw = res.choices[0]?.message?.content?.trim() ?? '{}';
+    try {
+      const parsed = JSON.parse(raw) as { needs_sql?: unknown; chat_message?: unknown };
+      const needsSql = parsed.needs_sql === true;
+      const chatMessage =
+        typeof parsed.chat_message === 'string' ? parsed.chat_message.trim() : '';
+      if (!needsSql) {
+        return {
+          needsSql: false,
+          chatMessage:
+            chatMessage ||
+            'Hi! Ask me about your projects, costs, RFIs, delays, or team — in plain English.',
+        };
+      }
+      return { needsSql: true, chatMessage: '' };
+    } catch {
+      this.logger.warn(`AI intent JSON parse failed: ${raw.slice(0, 200)}`);
+      return { needsSql: true, chatMessage: '' };
+    }
+  }
+
   async query(
     tenantId: string,
     question: string,
@@ -78,6 +143,17 @@ export class AiQueryService {
     if (!key) throw new BadRequestException('OPENAI_API_KEY not configured');
 
     const openai = new OpenAI({ apiKey: key });
+
+    const intent = await this.classifyIntent(openai, question, history);
+    if (!intent.needsSql) {
+      return {
+        answer: intent.chatMessage,
+        sql: '',
+        rows: [],
+        rowCount: 0,
+        error: null,
+      };
+    }
 
     const historyMessages: OpenAI.ChatCompletionMessageParam[] = history
       .slice(-10)
@@ -89,7 +165,15 @@ export class AiQueryService {
       messages: [
         {
           role: 'system',
-          content: `You are a SQL assistant for a construction management platform called BuildOS. Given a natural language question about project data, generate a single PostgreSQL SELECT query.\n\nRules:\n- Return ONLY the raw SQL with $1 as the tenant_id parameter placeholder.\n- No markdown fences, no explanation, just the SQL.\n- If the user asks a follow-up, use context from the conversation to understand what they mean.\n\n${SCHEMA_CONTEXT}`,
+          content: `You are a SQL assistant for BuildOS. Generate a single PostgreSQL SELECT that answers the user's question.
+
+Rules:
+- Return ONLY the raw SQL. Use $1 as the bound parameter for the tenant UUID (tenant_id filters or p.tenant_id = $1 in joins).
+- No markdown fences, no explanation.
+- Tables without a tenant_id column MUST be scoped by joining projects AS p ON p.id = <child>.project_id AND p.tenant_id = $1, or materials_requests AS mr ON mr.id = materials_request_items.materials_request_id AND mr.tenant_id = $1.
+- If the user message is a follow-up, use conversation context to interpret it.
+
+${SCHEMA_CONTEXT}`,
         },
         ...historyMessages,
         { role: 'user', content: question },
