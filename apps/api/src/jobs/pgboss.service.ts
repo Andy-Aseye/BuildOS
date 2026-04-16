@@ -14,11 +14,12 @@ export class PgBossService implements OnModuleInit, OnModuleDestroy {
   private async startWithRetry(maxAttempts: number, baseDelayMs: number) {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        const connectionString = env.DIRECT_URL;
+        const connectionString = env.DIRECT_URL.includes('?')
+          ? `${env.DIRECT_URL}&connect_timeout=15`
+          : `${env.DIRECT_URL}?connect_timeout=15`;
         this.boss = new PgBoss({
           connectionString,
           ssl: { rejectUnauthorized: false },
-          connectionOptions: { connectionTimeoutMillis: 15_000 },
         });
         await this.boss.start();
         this.logger.log('pg-boss started');
