@@ -26,7 +26,7 @@ export class BudgetAlertService {
 
   /** Call after confirmed spend changes or project budget changes. */
   async onBudgetChanged(projectId: string, tenantId: string): Promise<void> {
-    if (!env.WHATSAPP_TOKEN || !env.WHATSAPP_PHONE_ID) {
+    if (!env.WHATSAPP_ACCESS_TOKEN || !env.WHATSAPP_PHONE_NUMBER_ID) {
       this.logger.debug('WhatsApp not configured; skipping budget alerts');
       return;
     }
