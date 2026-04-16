@@ -7,8 +7,8 @@ export class WhatsAppCloudService {
   private readonly base = `https://graph.facebook.com/v21.0`;
 
   private headers(): HeadersInit {
-    const token = env.WHATSAPP_TOKEN;
-    if (!token) throw new Error('WHATSAPP_TOKEN not configured');
+    const token = env.WHATSAPP_ACCESS_TOKEN;
+    if (!token) throw new Error('WHATSAPP_ACCESS_TOKEN not configured');
     return {
       Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
@@ -16,8 +16,8 @@ export class WhatsAppCloudService {
   }
 
   async sendTextMessage(toPhoneDigits: string, body: string): Promise<void> {
-    const phoneId = env.WHATSAPP_PHONE_ID;
-    if (!phoneId) throw new Error('WHATSAPP_PHONE_ID not configured');
+    const phoneId = env.WHATSAPP_PHONE_NUMBER_ID;
+    if (!phoneId) throw new Error('WHATSAPP_PHONE_NUMBER_ID not configured');
 
     const to = toPhoneDigits.replace(/\D/g, '');
     const url = `${this.base}/${phoneId}/messages`;

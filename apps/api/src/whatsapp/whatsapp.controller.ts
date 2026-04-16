@@ -5,6 +5,7 @@ import {
   Get,
   Headers,
   HttpCode,
+  Logger,
   Post,
   Query,
   Req,
@@ -18,6 +19,8 @@ import type { WhatsAppWebhookPayload } from './whatsapp.types';
 
 @Controller('webhooks/whatsapp')
 export class WhatsAppController {
+  private readonly logger = new Logger(WhatsAppController.name);
+
   constructor(private readonly webhook: WhatsAppWebhookService) {}
 
   @Get()
@@ -27,9 +30,12 @@ export class WhatsAppController {
     @Query('hub.challenge') challenge: string | undefined,
     @Res() res: Response,
   ) {
+    this.logger.log(`Webhook verify attempt: mode=${mode}, tokenMatch=${token === env.WHATSAPP_VERIFY_TOKEN}, hasChallenge=${!!challenge}`);
     if (mode === 'subscribe' && token === env.WHATSAPP_VERIFY_TOKEN && challenge) {
+      this.logger.log('Webhook verification successful');
       return res.status(200).type('text/plain').send(challenge);
     }
+    this.logger.warn(`Webhook verify FAILED — mode=${mode}, receivedToken=${token}, configuredToken=${env.WHATSAPP_VERIFY_TOKEN ?? 'NOT SET'}`);
     return res.status(403).send();
   }
 
