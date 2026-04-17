@@ -31,7 +31,12 @@ export class WhatsAppWebhookService {
       this.logger.error('pg-boss not available — cannot enqueue WhatsApp job');
       return false;
     }
-    await boss.send(QUEUE_WHATSAPP_INBOUND, { payload });
+    const jobId = await boss.send(QUEUE_WHATSAPP_INBOUND, { payload });
+    if (jobId === null) {
+      this.logger.error(`pg-boss returned null for send() — queue "${QUEUE_WHATSAPP_INBOUND}" may not exist yet`);
+      return false;
+    }
+    this.logger.log(`Job enqueued: id=${jobId} queue=${QUEUE_WHATSAPP_INBOUND}`);
     return true;
   }
 }

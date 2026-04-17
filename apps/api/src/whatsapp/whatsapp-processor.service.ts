@@ -40,14 +40,19 @@ export class WhatsAppProcessorService {
 
   async processWebhookPayload(payload: WhatsAppWebhookPayload): Promise<void> {
     const entries = payload.entry ?? [];
+    this.logger.log(`processWebhookPayload — ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}`);
     for (const entry of entries) {
       for (const change of entry.changes ?? []) {
-        if (change.field !== 'messages') continue;
+        if (change.field !== 'messages') {
+          this.logger.debug(`Skipping change with field="${change.field}"`);
+          continue;
+        }
         const value = change.value;
         const messages = value?.messages ?? [];
         const phoneNumberId = value?.metadata?.phone_number_id;
         const toPhone = value?.metadata?.display_phone_number ?? phoneNumberId ?? '';
 
+        this.logger.log(`Processing ${messages.length} message(s) for phoneNumberId=${phoneNumberId ?? 'unknown'}`);
         for (const msg of messages) {
           try {
             await this.processOneInbound(msg, toPhone);
@@ -62,12 +67,13 @@ export class WhatsAppProcessorService {
   private async processOneInbound(msg: WhatsAppInboundMessage, toPhone: string): Promise<void> {
     const fromPhone = normalizePhone(msg.from);
     const whatsappMsgId = msg.id;
+    this.logger.log(`Processing inbound message id=${whatsappMsgId} type=${msg.type} from=${fromPhone}`);
 
     const existing = await this.prisma.whatsappMessage.findUnique({
       where: { whatsappMsgId },
     });
     if (existing) {
-      this.logger.debug(`Duplicate message ${whatsappMsgId}, skipping`);
+      this.logger.warn(`Duplicate message ${whatsappMsgId} — skipping`);
       return;
     }
 
@@ -178,6 +184,7 @@ export class WhatsAppProcessorService {
     });
 
     const summary = classification.summary ?? combinedText.slice(0, 120) ?? 'Received';
+    this.logger.log(`Message ${whatsappMsgId} processed — intent=${classification.intent}, project=${project.code}`);
     await this.safeReply(fromPhone, `✅ Logged to ${project.code} — ${summary}`);
   }
 

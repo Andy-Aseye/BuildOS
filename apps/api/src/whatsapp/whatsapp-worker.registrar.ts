@@ -25,9 +25,15 @@ export class WhatsAppWorkerRegistrar implements OnModuleInit {
       /* queue may already exist */
     }
     await boss.work(QUEUE_WHATSAPP_INBOUND, async (jobs) => {
+      this.logger.log(`Processing ${jobs.length} job(s) from ${QUEUE_WHATSAPP_INBOUND}`);
       for (const job of jobs) {
-        const data = job.data as WhatsAppInboundJobData;
-        await this.processor.processWebhookPayload(data.payload);
+        try {
+          const data = job.data as WhatsAppInboundJobData;
+          await this.processor.processWebhookPayload(data.payload);
+        } catch (e) {
+          this.logger.error(`Unhandled error processing job ${job.id}`, e);
+          throw e; // rethrow so pg-boss can retry
+        }
       }
     });
     this.logger.log(`Worker registered: ${QUEUE_WHATSAPP_INBOUND}`);

@@ -50,13 +50,17 @@ export class WhatsAppController {
       throw new BadRequestException('Missing raw body for webhook verification');
     }
     if (!this.webhook.verifySignature(raw, signature)) {
+      this.logger.warn('Webhook signature verification failed — rejecting request');
       throw new ForbiddenException('Invalid signature');
     }
     const body = req.body as WhatsAppWebhookPayload;
+    this.logger.log(`Inbound webhook received — object=${body?.object ?? 'unknown'}, entries=${body?.entry?.length ?? 0}`);
     const ok = await this.webhook.enqueue(body);
     if (!ok) {
+      this.logger.error('Failed to enqueue webhook — pg-boss unavailable');
       throw new BadRequestException('Queue unavailable');
     }
+    this.logger.log('Webhook enqueued successfully');
     return { received: true };
   }
 }
