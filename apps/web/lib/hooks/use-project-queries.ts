@@ -532,7 +532,7 @@ export function useUpdateProject(projectId: string) {
 export function useAddProjectMember(projectId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { phone: string; role: string; name?: string }) =>
+    mutationFn: (body: { userId: string; role: string }) =>
       api.post(`/projects/${projectId}/members`, body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['project', projectId] });

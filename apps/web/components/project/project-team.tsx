@@ -1,27 +1,12 @@
 'use client';
 
-import { useState } from 'react';
-import { useProject, useAddProjectMember, useRemoveProjectMember } from '@/lib/hooks/use-project-queries';
+import { useState, useMemo } from 'react';
+import { useProject, useAddProjectMember, useRemoveProjectMember, useOrgUsers } from '@/lib/hooks/use-project-queries';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { SectionCard } from '@/components/ui/section-card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { useAuth } from '@/lib/auth-context';
 import { toast } from 'sonner';
-
-function normalizeWhatsAppPhone(raw: string): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return '';
-  const noSep = trimmed.replace(/[\s()-]/g, '');
-  if (noSep.startsWith('+')) {
-    const digits = noSep.slice(1).replace(/\D/g, '');
-    return digits ? `+${digits}` : '';
-  }
-  const digits = noSep.replace(/\D/g, '');
-  if (digits.length === 10 && digits.startsWith('0')) return `+233${digits.slice(1)}`;
-  if (digits.length === 12 && digits.startsWith('233')) return `+${digits}`;
-  if (digits.length >= 9) return `+${digits}`;
-  return trimmed;
-}
 
 const MEMBER_ROLES = [
   { value: 'FIELD_WORKER', label: 'Field worker' },
@@ -33,31 +18,37 @@ const MEMBER_ROLES = [
 export function ProjectTeam({ projectId }: { projectId: string }) {
   const { user: currentUser } = useAuth();
   const { data, isLoading, error } = useProject(projectId);
+  const { data: orgUsers } = useOrgUsers();
   const addMember = useAddProjectMember(projectId);
   const removeMember = useRemoveProjectMember(projectId);
   const [showForm, setShowForm] = useState(false);
-  const [phone, setPhone] = useState('');
-  const [name, setName] = useState('');
+  const [selectedUserId, setSelectedUserId] = useState('');
   const [role, setRole] = useState<string>('FIELD_WORKER');
   const [formError, setFormError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
 
   const canManage = currentUser?.role === 'OWNER' || currentUser?.role === 'PROJECT_MANAGER';
 
+  const members = data?.members ?? [];
+
+  const eligibleUsers = useMemo(() => {
+    if (!orgUsers) return [];
+    const memberUserIds = new Set(members.map((m) => m.user.id));
+    return orgUsers.filter((u) => u.isActive && !memberUserIds.has(u.id));
+  }, [orgUsers, members]);
+
   if (isLoading) return <p className="text-sm text-[var(--text-muted)]">Loading team…</p>;
   if (error || !data) return <p className="text-sm text-[var(--status-red)]">{error instanceof Error ? error.message : 'Failed to load team'}</p>;
 
-  const members = data.members ?? [];
   const inputCls = 'w-full px-4 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:border-transparent';
 
   async function onAdd(e: React.FormEvent) {
     e.preventDefault();
     setFormError(null);
-    const normalized = normalizeWhatsAppPhone(phone);
-    if (!normalized) { setFormError('Enter a WhatsApp number.'); return; }
+    if (!selectedUserId) { setFormError('Select a team member.'); return; }
     try {
-      await addMember.mutateAsync({ phone: normalized, role, ...(name.trim() ? { name: name.trim() } : {}) });
-      setPhone(''); setName(''); setShowForm(false);
+      await addMember.mutateAsync({ userId: selectedUserId, role });
+      setSelectedUserId(''); setShowForm(false);
       toast.success('Team member added');
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Could not add member';
@@ -83,30 +74,40 @@ export function ProjectTeam({ projectId }: { projectId: string }) {
           + Add member
         </button>
       ) : (
-        <SectionCard title="Add team member" subtitle="Uses WhatsApp number to find or create a user.">
-          <form onSubmit={onAdd} className="space-y-4 max-w-md">
-            {formError && <p className="text-xs text-[var(--status-red)] bg-red-50 border border-red-100 rounded-xl px-3 py-2">{formError}</p>}
-            <div>
-              <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">WhatsApp number</label>
-              <input required value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+233… or 024…" className={`${inputCls} font-mono`} />
+        <SectionCard title="Add team member" subtitle="Select an existing team member from your organisation.">
+          {eligibleUsers.length === 0 ? (
+            <div className="space-y-3 max-w-md">
+              <p className="text-sm text-[var(--text-muted)]">All team members are already on this project.</p>
+              <button type="button" onClick={() => setShowForm(false)} className="px-5 py-2.5 border border-[var(--border)] text-sm font-medium rounded-xl hover:bg-slate-50 transition-colors">Close</button>
             </div>
-            <div>
-              <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Display name (optional)</label>
-              <input value={name} onChange={(e) => setName(e.target.value)} className={inputCls} />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Role on site</label>
-              <select value={role} onChange={(e) => setRole(e.target.value)} className={inputCls}>
-                {MEMBER_ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
-              </select>
-            </div>
-            <div className="flex gap-3">
-              <button type="submit" disabled={addMember.isPending} className="px-5 py-2.5 bg-slate-900 hover:bg-black text-white text-sm font-medium rounded-xl disabled:opacity-60 transition-colors">
-                {addMember.isPending ? 'Adding…' : 'Add member'}
-              </button>
-              <button type="button" onClick={() => setShowForm(false)} className="px-5 py-2.5 border border-[var(--border)] text-sm font-medium rounded-xl hover:bg-slate-50 transition-colors">Cancel</button>
-            </div>
-          </form>
+          ) : (
+            <form onSubmit={onAdd} className="space-y-4 max-w-md">
+              {formError && <p className="text-xs text-[var(--status-red)] bg-red-50 border border-red-100 rounded-xl px-3 py-2">{formError}</p>}
+              <div>
+                <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Team member</label>
+                <select required value={selectedUserId} onChange={(e) => setSelectedUserId(e.target.value)} className={inputCls}>
+                  <option value="">Select a team member…</option>
+                  {eligibleUsers.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.name ?? u.email ?? u.whatsappPhone ?? 'Unnamed'} — {u.role.replace(/_/g, ' ').toLowerCase()}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[var(--text-secondary)] mb-1.5">Role on site</label>
+                <select value={role} onChange={(e) => setRole(e.target.value)} className={inputCls}>
+                  {MEMBER_ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+                </select>
+              </div>
+              <div className="flex gap-3">
+                <button type="submit" disabled={addMember.isPending} className="px-5 py-2.5 bg-slate-900 hover:bg-black text-white text-sm font-medium rounded-xl disabled:opacity-60 transition-colors">
+                  {addMember.isPending ? 'Adding…' : 'Add member'}
+                </button>
+                <button type="button" onClick={() => setShowForm(false)} className="px-5 py-2.5 border border-[var(--border)] text-sm font-medium rounded-xl hover:bg-slate-50 transition-colors">Cancel</button>
+              </div>
+            </form>
+          )}
         </SectionCard>
       )}
 
@@ -114,7 +115,7 @@ export function ProjectTeam({ projectId }: { projectId: string }) {
         <EmptyState
           icon={<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /></svg>}
           title="No team members yet"
-          description="Add members by their WhatsApp number."
+          description="Add members from your organisation."
         />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">

@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsEnum, IsNumber, IsDateString, MinLength, MaxLength } from 'class-validator';
+import { IsString, IsOptional, IsEnum, IsNumber, IsDateString, IsUUID, MinLength, MaxLength, ValidateIf } from 'class-validator';
 import { Type } from 'class-transformer';
 
 enum ProjectStatus {
@@ -93,8 +93,13 @@ export class UpdateProjectDto {
 }
 
 export class AddMemberDto {
+  @IsOptional()
+  @IsUUID()
+  userId?: string;
+
+  @ValidateIf((o) => !o.userId)
   @IsString()
-  phone: string;
+  phone?: string;
 
   @IsEnum(['OWNER', 'PROJECT_MANAGER', 'ARCHITECT', 'FOREMAN', 'FIELD_WORKER'] as const)
   role: string;

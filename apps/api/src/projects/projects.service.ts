@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma.module';
 import { CreateProjectDto, UpdateProjectDto, AddMemberDto } from './projects.dto';
 import { UserRole } from '@prisma/client';
@@ -96,25 +96,36 @@ export class ProjectsService {
   }
 
   async addMember(projectId: string, tenantId: string, data: AddMemberDto) {
+    if (!data.userId && !data.phone) {
+      throw new BadRequestException('Provide either userId or phone');
+    }
+
     const project = await this.prisma.project.findFirst({
       where: { id: projectId, tenantId, deletedAt: null },
       select: { id: true, code: true, name: true },
     });
     if (!project) throw new NotFoundException('Project not found');
 
-    let user = await this.prisma.user.findUnique({
-      where: { whatsappPhone: data.phone },
-    });
-
-    if (!user) {
-      user = await this.prisma.user.create({
-        data: {
-          tenantId,
-          whatsappPhone: data.phone,
-          name: data.name,
-          role: data.role as UserRole,
-        },
+    let user;
+    if (data.userId) {
+      user = await this.prisma.user.findFirst({
+        where: { id: data.userId, tenantId, deletedAt: null },
       });
+      if (!user) throw new NotFoundException('User not found in this organisation');
+    } else {
+      user = await this.prisma.user.findUnique({
+        where: { whatsappPhone: data.phone },
+      });
+      if (!user) {
+        user = await this.prisma.user.create({
+          data: {
+            tenantId,
+            whatsappPhone: data.phone!,
+            name: data.name,
+            role: data.role as UserRole,
+          },
+        });
+      }
     }
 
     const existing = await this.prisma.projectMember.findUnique({
@@ -127,9 +138,12 @@ export class ProjectsService {
       include: { user: { select: { id: true, name: true, whatsappPhone: true, role: true } } },
     });
 
-    void this.sendProjectWelcome(data.phone, project.code, project.name).catch((err) => {
-      this.logger.warn(`Welcome WhatsApp to ${data.phone} for ${project.code} failed: ${err}`);
-    });
+    const phone = user.whatsappPhone;
+    if (phone) {
+      void this.sendProjectWelcome(phone, project.code, project.name).catch((err) => {
+        this.logger.warn(`Welcome WhatsApp to ${phone} for ${project.code} failed: ${err}`);
+      });
+    }
 
     return member;
   }
