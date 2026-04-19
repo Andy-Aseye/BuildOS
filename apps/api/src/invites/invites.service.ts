@@ -23,7 +23,7 @@ export class InvitesService {
     tenantId: string,
     invitedById: string,
     callerRole: string,
-    data: { email: string; name?: string; role: string },
+    data: { email: string; name?: string; phone?: string; role: string },
   ) {
     if (callerRole !== 'OWNER' && callerRole !== 'PROJECT_MANAGER') {
       throw new ForbiddenException('Only owners and project managers can invite members');
@@ -47,6 +47,7 @@ export class InvitesService {
         tenantId,
         email: data.email,
         name: data.name,
+        phone: data.phone || null,
         role: data.role as UserRole,
         invitedById,
         expiresAt,

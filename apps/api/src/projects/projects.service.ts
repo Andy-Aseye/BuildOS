@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma.module';
 import { CreateProjectDto, UpdateProjectDto, AddMemberDto } from './projects.dto';
 import { UserRole } from '@prisma/client';
 import { BudgetAlertService } from '../costs/budget-alert.service';
+import { WhatsAppCloudService } from '../whatsapp/whatsapp-cloud.service';
 
 @Injectable()
 export class ProjectsService {
@@ -11,6 +12,7 @@ export class ProjectsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly budgetAlerts: BudgetAlertService,
+    private readonly whatsapp: WhatsAppCloudService,
   ) {}
 
   async findAll(tenantId: string) {
@@ -94,6 +96,12 @@ export class ProjectsService {
   }
 
   async addMember(projectId: string, tenantId: string, data: AddMemberDto) {
+    const project = await this.prisma.project.findFirst({
+      where: { id: projectId, tenantId, deletedAt: null },
+      select: { id: true, code: true, name: true },
+    });
+    if (!project) throw new NotFoundException('Project not found');
+
     let user = await this.prisma.user.findUnique({
       where: { whatsappPhone: data.phone },
     });
@@ -114,10 +122,26 @@ export class ProjectsService {
     });
     if (existing) throw new ConflictException('User is already a member of this project');
 
-    return this.prisma.projectMember.create({
+    const member = await this.prisma.projectMember.create({
       data: { projectId, userId: user.id, role: data.role as UserRole },
       include: { user: { select: { id: true, name: true, whatsappPhone: true, role: true } } },
     });
+
+    void this.sendProjectWelcome(data.phone, project.code, project.name).catch((err) => {
+      this.logger.warn(`Welcome WhatsApp to ${data.phone} for ${project.code} failed: ${err}`);
+    });
+
+    return member;
+  }
+
+  private async sendProjectWelcome(phone: string, code: string, name: string): Promise<void> {
+    const body =
+      `You have been added to project *${code}* (${name}) on BuildOS.\n\n` +
+      `To send updates, message this number. Include *#${code}* if you are on multiple projects.\n\n` +
+      `You can send:\n` +
+      `- Site photos with a caption\n` +
+      `- Text updates, costs, or attendance counts`;
+    await this.whatsapp.sendTextMessage(phone, body);
   }
 
   async removeMember(projectId: string, tenantId: string, userId: string) {
