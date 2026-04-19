@@ -62,23 +62,26 @@ RULES:
 
 const INTENT_SYSTEM = `You route messages for BuildOS, a construction management app assistant.
 
-Decide if the user wants to query their organization's project data from the database, or if they are chatting.
+Classify the user's message into exactly one intent: "sql", "explain", or "chat".
 
-needs_sql = true when:
+intent = "sql" when the user wants NEW data from the database:
 - They ask about projects, costs, budgets, RFIs, delays, materials, attendance, logs, phases, team members, drawings, reports, files, notifications, invites, or any question answerable from project records.
-- They ask a follow-up that references previous data results (e.g. "tell me more", "what about it?", "which ones?", "break it down", "show details", "explain that", "why?", "how much?", "who is responsible?"). Look at conversation history — if the previous assistant message included data or numbers, treat ambiguous follow-ups as data questions.
+- They ask a follow-up that needs a DIFFERENT query (e.g. "now show me by project", "what about last month?", "which ones are overdue?", "break it down by category").
 
-needs_sql = false ONLY for:
+intent = "explain" when the user is asking about, interpreting, or discussing PREVIOUS results:
+- They ask how a number was calculated or where it came from (e.g. "how did you get that?", "how did you come about this?", "where does that number come from?")
+- They ask what the data means or for interpretation (e.g. "what does that tell us?", "is that good?", "should I be worried?", "what do you think?")
+- They ask for clarification of a prior answer (e.g. "can you explain?", "why is it so high?", "what changed?")
+- They ask for advice or recommendations based on previous data (e.g. "what should we do about it?", "how can we improve?")
+- General rule: if the answer can be given by looking at the conversation history and prior data results WITHOUT running a new query, use "explain".
+
+intent = "chat" for everything else:
 - Pure greetings (hi, hey, hello) with no question attached
 - Pure thanks (thanks, thank you) with no follow-up question
 - Completely off-topic questions unrelated to construction or project management
-- Requests for general advice or strategy that cannot be answered from database records (e.g. "how should we improve our process?", "what best practices should we follow?")
 
 Respond with ONLY valid JSON (no markdown):
-{"needs_sql":boolean,"chat_message":string}
-
-When needs_sql is false, set chat_message to "" (empty string). The chat response will be generated separately with full context.
-When needs_sql is true, set chat_message to "".
+{"intent":"sql"|"explain"|"chat"}
 `.trim();
 
 const SQL_SYSTEM = `You are a SQL assistant for BuildOS. Generate a single PostgreSQL SELECT that answers the user's question.
@@ -92,7 +95,7 @@ Rules:
 
 ${SCHEMA_CONTEXT}`;
 
-type ChatMessage = { role: 'user' | 'assistant'; content: string };
+type Intent = 'sql' | 'explain' | 'chat';
 
 @Injectable()
 export class AiQueryService {
@@ -160,24 +163,24 @@ export class AiQueryService {
   private async classifyIntent(
     openai: OpenAI,
     question: string,
-    history: ChatMessage[],
-  ): Promise<{ needsSql: boolean; chatMessage: string }> {
-    const historyMessages: OpenAI.ChatCompletionMessageParam[] = history
-      .slice(-6)
-      .map((m) => ({ role: m.role, content: m.content }));
-
+    enrichedHistory: OpenAI.ChatCompletionMessageParam[],
+  ): Promise<Intent> {
     const raw = await this.llmCall(openai, [
       { role: 'system', content: INTENT_SYSTEM },
-      ...historyMessages,
+      ...enrichedHistory.slice(-10),
       { role: 'user', content: question },
     ], { json: true });
 
     try {
-      const parsed = JSON.parse(raw || '{}') as { needs_sql?: unknown };
-      return { needsSql: parsed.needs_sql === true, chatMessage: '' };
+      const parsed = JSON.parse(raw || '{}') as { intent?: string; needs_sql?: boolean };
+      const intent = parsed.intent;
+      if (intent === 'sql' || intent === 'explain' || intent === 'chat') return intent;
+      if (parsed.needs_sql === true) return 'sql';
+      if (parsed.needs_sql === false) return 'chat';
+      return 'sql';
     } catch {
       this.logger.warn(`AI intent JSON parse failed: ${raw.slice(0, 200)}`);
-      return { needsSql: true, chatMessage: '' };
+      return 'sql';
     }
   }
 
@@ -213,6 +216,24 @@ export class AiQueryService {
     return Array.isArray(result) ? result : [];
   }
 
+  private async chatReply(
+    openai: OpenAI,
+    dataEnrichedHistory: OpenAI.ChatCompletionMessageParam[],
+    question: string,
+    systemPrompt: string,
+  ): Promise<string> {
+    try {
+      const reply = await this.llmCall(openai, [
+        { role: 'system', content: systemPrompt },
+        ...dataEnrichedHistory,
+        { role: 'user', content: question },
+      ], { temperature: 0.4 });
+      return reply || 'I wasn\'t able to formulate a response. Could you try rephrasing your question?';
+    } catch {
+      return 'I wasn\'t able to formulate a response. Could you try rephrasing your question?';
+    }
+  }
+
   async getHistory(tenantId: string, userId: string) {
     return this.prisma.aiChatMessage.findMany({
       where: { tenantId, userId },
@@ -243,11 +264,6 @@ export class AiQueryService {
       take: 100,
     });
 
-    const history: ChatMessage[] = dbHistory.map((m) => ({
-      role: m.role as 'user' | 'assistant',
-      content: m.content,
-    }));
-
     const dataEnrichedHistory: OpenAI.ChatCompletionMessageParam[] = [];
     for (const m of dbHistory.slice(-12)) {
       dataEnrichedHistory.push({ role: m.role as 'user' | 'assistant', content: m.content });
@@ -268,59 +284,44 @@ export class AiQueryService {
       data: { tenantId, userId, role: 'user', content: question },
     });
 
-    let intent: { needsSql: boolean; chatMessage: string };
+    let intent: Intent;
     try {
-      intent = await this.classifyIntent(openai, question, history);
+      intent = await this.classifyIntent(openai, question, dataEnrichedHistory);
     } catch (err) {
       this.logger.warn(`Intent classification failed: ${err}`);
-      intent = { needsSql: true, chatMessage: '' };
+      intent = 'sql';
     }
 
-    if (!intent.needsSql) {
-      let chatReply: string;
-      try {
-        chatReply = await this.llmCall(openai, [
-          {
-            role: 'system',
-            content:
-              'You are the AI assistant for BuildOS, a construction project management app. You help users understand their projects, costs, RFIs, delays, team, and more. Be helpful, professional, and concise (3-5 sentences). Reference specific data from the conversation when giving advice or answering follow-ups. If the user greets you, respond warmly and invite them to ask about their project data.',
-          },
-          ...dataEnrichedHistory,
-          { role: 'user', content: question },
-        ], { temperature: 0.4 });
-      } catch {
-        chatReply = 'Hi! Ask me about your projects, costs, RFIs, delays, or team — in plain English.';
-      }
+    const CHAT_SYSTEM =
+      'You are the AI assistant for BuildOS, a construction project management app. You help users understand their projects, costs, RFIs, delays, team, and more. Be helpful, professional, and concise (3-5 sentences). If the user greets you, respond warmly and invite them to ask about their project data.';
 
-      if (!chatReply) {
-        chatReply = 'Hi! Ask me about your projects, costs, RFIs, delays, or team — in plain English.';
-      }
+    const EXPLAIN_SYSTEM =
+      'You are the AI assistant for BuildOS, a construction project management app. The user is asking about previous data or results from the conversation. Use the data context provided in the conversation history to explain how the numbers were derived, what they mean, and provide helpful interpretation. Reference specific numbers and SQL queries when available. Be clear, professional, and concise (3-5 sentences).';
+
+    // ── Chat or Explain intent: answer conversationally ──
+    if (intent === 'chat' || intent === 'explain') {
+      const systemPrompt = intent === 'explain' ? EXPLAIN_SYSTEM : CHAT_SYSTEM;
+      const reply = await this.chatReply(openai, dataEnrichedHistory, question, systemPrompt);
 
       await this.prisma.aiChatMessage.create({
-        data: { tenantId, userId, role: 'assistant', content: chatReply },
+        data: { tenantId, userId, role: 'assistant', content: reply },
       });
-      return {
-        answer: chatReply,
-        sql: '',
-        rows: [],
-        rowCount: 0,
-        error: null,
-      };
+      return { answer: reply, sql: '', rows: [], rowCount: 0, error: null };
     }
 
+    // ── SQL intent: generate and execute a query ──
     let sql: string;
     let rows: unknown[] = [];
-    let queryError: string | null = null;
 
     try {
       sql = await this.generateSql(openai, question, dataEnrichedHistory);
     } catch (err) {
-      this.logger.warn(`SQL generation failed: ${err}`);
-      const errAnswer = 'I had trouble understanding that question. Could you rephrase it?';
+      this.logger.warn(`SQL generation failed, falling back to chat: ${err}`);
+      const fallback = await this.chatReply(openai, dataEnrichedHistory, question, EXPLAIN_SYSTEM);
       await this.prisma.aiChatMessage.create({
-        data: { tenantId, userId, role: 'assistant', content: errAnswer },
+        data: { tenantId, userId, role: 'assistant', content: fallback },
       });
-      return { answer: errAnswer, sql: '', rows: [], rowCount: 0, error: 'SQL generation failed' };
+      return { answer: fallback, sql: '', rows: [], rowCount: 0, error: null };
     }
 
     try {
@@ -333,43 +334,44 @@ export class AiQueryService {
         sql = await this.generateSql(openai, question, dataEnrichedHistory, firstError);
         rows = await this.executeQuery(sql, tenantId);
       } catch (retryErr) {
-        this.logger.warn(`AI query retry failed: ${retryErr}`);
-        queryError = 'Query execution failed';
+        this.logger.warn(`AI query retry failed, falling back to chat: ${retryErr}`);
+        const fallback = await this.chatReply(openai, dataEnrichedHistory, question, EXPLAIN_SYSTEM);
+        await this.prisma.aiChatMessage.create({
+          data: { tenantId, userId, role: 'assistant', content: fallback },
+        });
+        return { answer: fallback, sql: '', rows: [], rowCount: 0, error: null };
       }
     }
 
+    // ── Summarize SQL results ──
     let answer: string;
-    if (queryError) {
-      answer = "I wasn't able to retrieve that data. Could you try rephrasing your question?";
-    } else {
-      try {
-        const dataPreview = JSON.stringify(rows.slice(0, 20), (_k, v) =>
-          typeof v === 'bigint' ? Number(v) : v,
-        );
+    try {
+      const dataPreview = JSON.stringify(rows.slice(0, 20), (_k, v) =>
+        typeof v === 'bigint' ? Number(v) : v,
+      );
 
-        answer = await this.llmCall(openai, [
-          {
-            role: 'system',
-            content:
-              'You are a helpful assistant for a construction project management app. Given a user question and query results, provide a clear, concise natural language answer. Use specific numbers from the data. Be direct and professional. If the data is empty, say so helpfully. Keep answers to 2-4 sentences unless the user asked for detail.',
-          },
-          ...dataEnrichedHistory,
-          {
-            role: 'user',
-            content: `Question: ${question}\n\nQuery returned ${rows.length} rows. Data:\n${dataPreview}`,
-          },
-        ], { temperature: 0.3 });
+      answer = await this.llmCall(openai, [
+        {
+          role: 'system',
+          content:
+            'You are a helpful assistant for a construction project management app. Given a user question and query results, provide a clear, concise natural language answer. Use specific numbers from the data. Be direct and professional. If the data is empty, say so helpfully. Keep answers to 2-4 sentences unless the user asked for detail.',
+        },
+        ...dataEnrichedHistory,
+        {
+          role: 'user',
+          content: `Question: ${question}\n\nQuery returned ${rows.length} rows. Data:\n${dataPreview}`,
+        },
+      ], { temperature: 0.3 });
 
-        if (!answer) {
-          answer = rows.length
-            ? `Found ${rows.length} result${rows.length === 1 ? '' : 's'}.`
-            : 'No matching data found.';
-        }
-      } catch {
+      if (!answer) {
         answer = rows.length
           ? `Found ${rows.length} result${rows.length === 1 ? '' : 's'}.`
           : 'No matching data found.';
       }
+    } catch {
+      answer = rows.length
+        ? `Found ${rows.length} result${rows.length === 1 ? '' : 's'}.`
+        : 'No matching data found.';
     }
 
     const serializedRows = rows.map((r) => {
@@ -397,7 +399,7 @@ export class AiQueryService {
       sql,
       rows: serializedRows,
       rowCount: rows.length,
-      error: queryError,
+      error: null,
     };
   }
 }

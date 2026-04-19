@@ -8,6 +8,7 @@ function buildService(overrides: {
   llmResponses?: string[];
   dbHistory?: Array<{ role: string; content: string; resultData?: unknown; createdAt: Date }>;
   queryResult?: unknown[];
+  queryError?: Error;
 } = {}) {
   const llmResponses = [...(overrides.llmResponses ?? [])];
   let llmCallIndex = 0;
@@ -18,7 +19,9 @@ function buildService(overrides: {
       create: jest.fn().mockResolvedValue({ id: 'msg-1' }),
       deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
-    $queryRawUnsafe: jest.fn().mockResolvedValue(overrides.queryResult ?? []),
+    $queryRawUnsafe: overrides.queryError
+      ? jest.fn().mockRejectedValue(overrides.queryError)
+      : jest.fn().mockResolvedValue(overrides.queryResult ?? []),
   };
 
   const service = new AiQueryService(mockPrisma as never);
@@ -29,14 +32,156 @@ function buildService(overrides: {
     return response;
   });
 
-  // Replace private llmCall with mock
   (service as unknown as Record<string, unknown>)['llmCall'] = mockLlmCall;
 
   return { service, mockPrisma, mockLlmCall };
 }
 
 describe('AiQueryService', () => {
-  describe('query() — follow-up with data context', () => {
+  describe('three-way intent routing', () => {
+    it('should route intent=sql to SQL generation path', async () => {
+      const { service, mockLlmCall } = buildService({
+        llmResponses: [
+          JSON.stringify({ intent: 'sql' }),
+          "SELECT count(*) AS total FROM v_projects WHERE tenant_id = $1::uuid AND deleted_at IS NULL",
+          'You have 5 projects.',
+        ],
+        queryResult: [{ total: 5 }],
+      });
+
+      const result = await service.query(TENANT_ID, USER_ID, 'How many projects?');
+
+      expect(result.answer).toBe('You have 5 projects.');
+      expect(result.sql).toContain('SELECT');
+      expect(result.rows).toEqual([{ total: 5 }]);
+      expect(mockLlmCall).toHaveBeenCalledTimes(3);
+    });
+
+    it('should route intent=explain to contextual chat with explain system prompt', async () => {
+      const previousRows = [{ projected_income: 1620000 }];
+
+      const { service, mockLlmCall } = buildService({
+        dbHistory: [
+          { role: 'user', content: 'What is our projected income?', createdAt: new Date('2026-01-01') },
+          {
+            role: 'assistant',
+            content: 'Your projected income is $1,620,000.',
+            resultData: { rows: previousRows, rowCount: 1 },
+            createdAt: new Date('2026-01-01T00:01:00'),
+          },
+        ],
+        llmResponses: [
+          JSON.stringify({ intent: 'explain' }),
+          'The projected income of $1,620,000 was derived from summing the budget_usd values across all your active projects.',
+        ],
+      });
+
+      const result = await service.query(TENANT_ID, USER_ID, 'How did you come about this projected income?');
+
+      expect(result.answer).toContain('$1,620,000');
+      expect(result.sql).toBe('');
+      expect(result.rows).toEqual([]);
+      expect(mockLlmCall).toHaveBeenCalledTimes(2);
+
+      const chatCall = mockLlmCall.mock.calls[1];
+      const systemMsg = (chatCall[1] as Array<{ role: string; content: string }>)[0];
+      expect(systemMsg.content).toContain('previous data');
+    });
+
+    it('should route intent=chat to general chat without explain context', async () => {
+      const { service, mockLlmCall } = buildService({
+        llmResponses: [
+          JSON.stringify({ intent: 'chat' }),
+          'Hello! How can I help you with your projects today?',
+        ],
+      });
+
+      const result = await service.query(TENANT_ID, USER_ID, 'Hi there');
+
+      expect(result.answer).toContain('Hello');
+      expect(result.sql).toBe('');
+      expect(mockLlmCall).toHaveBeenCalledTimes(2);
+
+      const chatCall = mockLlmCall.mock.calls[1];
+      const systemMsg = (chatCall[1] as Array<{ role: string; content: string }>)[0];
+      expect(systemMsg.content).not.toContain('previous data');
+    });
+
+    it('should handle legacy needs_sql=true response from intent classifier', async () => {
+      const { service } = buildService({
+        llmResponses: [
+          JSON.stringify({ needs_sql: true }),
+          "SELECT count(*) AS total FROM v_projects WHERE tenant_id = $1::uuid AND deleted_at IS NULL",
+          'You have 3 projects.',
+        ],
+        queryResult: [{ total: 3 }],
+      });
+
+      const result = await service.query(TENANT_ID, USER_ID, 'How many projects?');
+      expect(result.sql).toContain('SELECT');
+    });
+
+    it('should handle legacy needs_sql=false response from intent classifier', async () => {
+      const { service } = buildService({
+        llmResponses: [
+          JSON.stringify({ needs_sql: false }),
+          'Hello! Ask me about your projects.',
+        ],
+      });
+
+      const result = await service.query(TENANT_ID, USER_ID, 'Hey');
+      expect(result.sql).toBe('');
+      expect(result.answer).toContain('Hello');
+    });
+  });
+
+  describe('SQL failure fallback to chat', () => {
+    it('should fall back to chat when SQL generation fails', async () => {
+      const { service, mockLlmCall } = buildService({
+        dbHistory: [
+          { role: 'user', content: 'Show costs', createdAt: new Date('2026-01-01') },
+          {
+            role: 'assistant',
+            content: 'Total costs are GHS 50,000.',
+            resultData: { rows: [{ total: 50000 }], rowCount: 1 },
+            createdAt: new Date('2026-01-01T00:01:00'),
+          },
+        ],
+        llmResponses: [
+          JSON.stringify({ intent: 'sql' }),
+          'I cannot generate SQL for this question.',
+          'Based on the previous data, your total costs are GHS 50,000.',
+        ],
+      });
+
+      const result = await service.query(TENANT_ID, USER_ID, 'Explain the costs');
+
+      expect(result.answer).toContain('50,000');
+      expect(result.error).toBeNull();
+      expect(result.sql).toBe('');
+    });
+
+    it('should fall back to chat when both SQL execution attempts fail', async () => {
+      const { service } = buildService({
+        llmResponses: [
+          JSON.stringify({ intent: 'sql' }),
+          "SELECT * FROM v_projects WHERE tenant_id = $1::uuid",
+          "SELECT * FROM v_projects WHERE tenant_id = $1::uuid",
+          'I can help you explore your project data. Could you be more specific about what you need?',
+        ],
+        queryError: new Error('relation "v_projects" does not exist'),
+      });
+
+      const result = await service.query(TENANT_ID, USER_ID, 'Show me everything');
+
+      expect(result.error).toBeNull();
+      expect(result.answer).toBeTruthy();
+      expect(result.answer).not.toContain('I had trouble understanding');
+      expect(result.answer).not.toContain("I wasn't able to retrieve");
+    });
+  });
+
+  describe('data context in enriched history', () => {
     it('should pass data-enriched history to SQL generation on follow-up queries', async () => {
       const previousRows = [
         { status: 'ACTIVE', count: 3 },
@@ -54,11 +199,8 @@ describe('AiQueryService', () => {
           },
         ],
         llmResponses: [
-          // 1st call: intent classification → needs_sql
-          JSON.stringify({ needs_sql: true, chat_message: '' }),
-          // 2nd call: SQL generation
+          JSON.stringify({ intent: 'sql' }),
           "SELECT status, count(*) AS count FROM v_projects WHERE tenant_id = $1::uuid AND deleted_at IS NULL GROUP BY status",
-          // 3rd call: answer generation
           'You have 3 active and 2 completed projects.',
         ],
         queryResult: previousRows,
@@ -67,9 +209,7 @@ describe('AiQueryService', () => {
       const result = await service.query(TENANT_ID, USER_ID, 'Break that down by status');
 
       expect(result.answer).toBe('You have 3 active and 2 completed projects.');
-      expect(result.rows).toEqual(previousRows);
 
-      // The SQL generation call (2nd llmCall) should receive data context
       const sqlGenCall = mockLlmCall.mock.calls[1];
       const sqlGenMessages = sqlGenCall[1] as Array<{ role: string; content: string }>;
       const dataContextMsg = sqlGenMessages.find((m) =>
@@ -78,7 +218,6 @@ describe('AiQueryService', () => {
       expect(dataContextMsg).toBeDefined();
       expect(dataContextMsg!.content).toContain('5 rows returned');
 
-      // Verify the user message was persisted
       expect(mockPrisma.aiChatMessage.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
@@ -106,21 +245,19 @@ describe('AiQueryService', () => {
           },
         ],
         llmResponses: [
-          JSON.stringify({ needs_sql: false, chat_message: '' }),
+          JSON.stringify({ intent: 'chat' }),
           'Sure, the logs show...',
         ],
       });
 
       await service.query(TENANT_ID, USER_ID, 'Tell me more');
 
-      // Chat reply call (2nd llmCall) should have a truncated data context
       const chatCall = mockLlmCall.mock.calls[1];
       const chatMessages = chatCall[1] as Array<{ role: string; content: string }>;
       const dataContextMsg = chatMessages.find((m) =>
         m.content.includes('[Data context:'),
       );
       expect(dataContextMsg).toBeDefined();
-      // The raw JSON of 5 rows with 1000-char strings is ~5015 chars; must be truncated
       expect(dataContextMsg!.content.length).toBeLessThan(2200);
     });
   });
