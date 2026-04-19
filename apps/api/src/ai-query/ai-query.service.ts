@@ -62,17 +62,23 @@ RULES:
 
 const INTENT_SYSTEM = `You route messages for BuildOS, a construction management app assistant.
 
-Decide if the user wants to query their organization's project data from the database, or if they are chatting (greeting, thanks, empty, off-topic, or not a data question).
+Decide if the user wants to query their organization's project data from the database, or if they are chatting.
 
-needs_sql = true when they ask about projects, costs, budgets, RFIs, delays, materials, attendance, logs, phases, team members, drawings, reports, files, notifications, invites, or any question answerable from project records.
+needs_sql = true when:
+- They ask about projects, costs, budgets, RFIs, delays, materials, attendance, logs, phases, team members, drawings, reports, files, notifications, invites, or any question answerable from project records.
+- They ask a follow-up that references previous data results (e.g. "tell me more", "what about it?", "which ones?", "break it down", "show details", "explain that", "why?", "how much?", "who is responsible?"). Look at conversation history — if the previous assistant message included data or numbers, treat ambiguous follow-ups as data questions.
 
-needs_sql = false for greetings (hi, hey, hello), thanks, small talk, jokes, or when they give no concrete question.
+needs_sql = false ONLY for:
+- Pure greetings (hi, hey, hello) with no question attached
+- Pure thanks (thanks, thank you) with no follow-up question
+- Completely off-topic questions unrelated to construction or project management
+- Requests for general advice or strategy that cannot be answered from database records (e.g. "how should we improve our process?", "what best practices should we follow?")
 
 Respond with ONLY valid JSON (no markdown):
 {"needs_sql":boolean,"chat_message":string}
 
-When needs_sql is false, chat_message must be a short friendly reply (1-3 sentences) inviting them to ask about projects, costs, RFIs, or team data.
-When needs_sql is true, set chat_message to an empty string "".
+When needs_sql is false, set chat_message to "" (empty string). The chat response will be generated separately with full context.
+When needs_sql is true, set chat_message to "".
 `.trim();
 
 const SQL_SYSTEM = `You are a SQL assistant for BuildOS. Generate a single PostgreSQL SELECT that answers the user's question.
@@ -167,19 +173,8 @@ export class AiQueryService {
     ], { json: true });
 
     try {
-      const parsed = JSON.parse(raw || '{}') as { needs_sql?: unknown; chat_message?: unknown };
-      const needsSql = parsed.needs_sql === true;
-      const chatMessage =
-        typeof parsed.chat_message === 'string' ? parsed.chat_message.trim() : '';
-      if (!needsSql) {
-        return {
-          needsSql: false,
-          chatMessage:
-            chatMessage ||
-            'Hi! Ask me about your projects, costs, RFIs, delays, or team — in plain English.',
-        };
-      }
-      return { needsSql: true, chatMessage: '' };
+      const parsed = JSON.parse(raw || '{}') as { needs_sql?: unknown };
+      return { needsSql: parsed.needs_sql === true, chatMessage: '' };
     } catch {
       this.logger.warn(`AI intent JSON parse failed: ${raw.slice(0, 200)}`);
       return { needsSql: true, chatMessage: '' };
@@ -253,6 +248,22 @@ export class AiQueryService {
       content: m.content,
     }));
 
+    const dataEnrichedHistory: OpenAI.ChatCompletionMessageParam[] = [];
+    for (const m of dbHistory.slice(-12)) {
+      dataEnrichedHistory.push({ role: m.role as 'user' | 'assistant', content: m.content });
+      if (m.role === 'assistant' && m.resultData) {
+        const rd = m.resultData as { rows?: unknown[]; rowCount?: number };
+        if (rd.rows?.length) {
+          const raw = JSON.stringify(rd.rows.slice(0, 5));
+          const preview = raw.length > 2000 ? raw.slice(0, 2000) + '...]' : raw;
+          dataEnrichedHistory.push({
+            role: 'assistant',
+            content: `[Data context: ${rd.rowCount ?? rd.rows.length} rows returned. Sample: ${preview}]`,
+          });
+        }
+      }
+    }
+
     await this.prisma.aiChatMessage.create({
       data: { tenantId, userId, role: 'user', content: question },
     });
@@ -266,11 +277,30 @@ export class AiQueryService {
     }
 
     if (!intent.needsSql) {
+      let chatReply: string;
+      try {
+        chatReply = await this.llmCall(openai, [
+          {
+            role: 'system',
+            content:
+              'You are the AI assistant for BuildOS, a construction project management app. You help users understand their projects, costs, RFIs, delays, team, and more. Be helpful, professional, and concise (3-5 sentences). Reference specific data from the conversation when giving advice or answering follow-ups. If the user greets you, respond warmly and invite them to ask about their project data.',
+          },
+          ...dataEnrichedHistory,
+          { role: 'user', content: question },
+        ], { temperature: 0.4 });
+      } catch {
+        chatReply = 'Hi! Ask me about your projects, costs, RFIs, delays, or team — in plain English.';
+      }
+
+      if (!chatReply) {
+        chatReply = 'Hi! Ask me about your projects, costs, RFIs, delays, or team — in plain English.';
+      }
+
       await this.prisma.aiChatMessage.create({
-        data: { tenantId, userId, role: 'assistant', content: intent.chatMessage },
+        data: { tenantId, userId, role: 'assistant', content: chatReply },
       });
       return {
-        answer: intent.chatMessage,
+        answer: chatReply,
         sql: '',
         rows: [],
         rowCount: 0,
@@ -278,16 +308,12 @@ export class AiQueryService {
       };
     }
 
-    const historyMessages: OpenAI.ChatCompletionMessageParam[] = history
-      .slice(-10)
-      .map((m) => ({ role: m.role, content: m.content }));
-
     let sql: string;
     let rows: unknown[] = [];
     let queryError: string | null = null;
 
     try {
-      sql = await this.generateSql(openai, question, historyMessages);
+      sql = await this.generateSql(openai, question, dataEnrichedHistory);
     } catch (err) {
       this.logger.warn(`SQL generation failed: ${err}`);
       const errAnswer = 'I had trouble understanding that question. Could you rephrase it?';
@@ -304,7 +330,7 @@ export class AiQueryService {
       this.logger.warn(`AI query attempt 1 failed: ${firstError}`);
 
       try {
-        sql = await this.generateSql(openai, question, historyMessages, firstError);
+        sql = await this.generateSql(openai, question, dataEnrichedHistory, firstError);
         rows = await this.executeQuery(sql, tenantId);
       } catch (retryErr) {
         this.logger.warn(`AI query retry failed: ${retryErr}`);
@@ -327,7 +353,7 @@ export class AiQueryService {
             content:
               'You are a helpful assistant for a construction project management app. Given a user question and query results, provide a clear, concise natural language answer. Use specific numbers from the data. Be direct and professional. If the data is empty, say so helpfully. Keep answers to 2-4 sentences unless the user asked for detail.',
           },
-          ...historyMessages,
+          ...dataEnrichedHistory,
           {
             role: 'user',
             content: `Question: ${question}\n\nQuery returned ${rows.length} rows. Data:\n${dataPreview}`,
