@@ -452,7 +452,7 @@ export function useInvites() {
 export function useCreateInvite() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { email: string; name?: string; role: string }) =>
+    mutationFn: (body: { email: string; name?: string; phone?: string; role: string }) =>
       api.post<InviteRow>('/invites', body),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['invites'] });
@@ -1084,10 +1084,42 @@ export type AiQueryResult = {
   error?: string | null;
 };
 
+export type AiChatHistoryMessage = {
+  id: string;
+  role: string;
+  content: string;
+  sqlQuery?: string | null;
+  resultData?: { rows: Record<string, unknown>[]; rowCount: number } | null;
+  createdAt: string;
+};
+
 export function useAiQuery() {
+  const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { question: string; history?: AiChatMessage[] }) =>
+    mutationFn: (body: { question: string }) =>
       api.post<AiQueryResult>('/ai-query', body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['ai-chat-history'] });
+    },
+  });
+}
+
+export function useAiChatHistory() {
+  return useQuery({
+    queryKey: ['ai-chat-history'],
+    queryFn: () => api.get<AiChatHistoryMessage[]>('/ai-query/history'),
+    staleTime: Infinity,
+    refetchInterval: false,
+  });
+}
+
+export function useClearAiChatHistory() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.delete('/ai-query/history'),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['ai-chat-history'] });
+    },
   });
 }
 

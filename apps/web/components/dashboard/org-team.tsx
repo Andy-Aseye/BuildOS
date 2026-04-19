@@ -56,7 +56,7 @@ export function OrgTeam() {
   const { user: currentUser } = useAuth();
   const isOwner = currentUser?.role === 'OWNER';
   const { data, isLoading, error } = useOrgUsers();
-  const { data: invites } = useInvites();
+  const { data: invites, isError: invitesError } = useInvites();
   const updateUser = useUpdateUser();
   const deleteUser = useDeleteUser();
   const createInvite = useCreateInvite();
@@ -69,6 +69,7 @@ export function OrgTeam() {
   const [showInvites, setShowInvites] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteName, setInviteName] = useState('');
+  const [invitePhone, setInvitePhone] = useState('');
   const [inviteRole, setInviteRole] = useState<string>('FIELD_WORKER');
   const [inviteLink, setInviteLink] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
@@ -80,6 +81,7 @@ export function OrgTeam() {
   const resetInviteForm = useCallback(() => {
     setInviteEmail('');
     setInviteName('');
+    setInvitePhone('');
     setInviteRole('FIELD_WORKER');
     setInviteLink(null);
     setFormError(null);
@@ -128,6 +130,7 @@ export function OrgTeam() {
       const result = await createInvite.mutateAsync({
         email: inviteEmail,
         name: inviteName || undefined,
+        phone: invitePhone.trim() || undefined,
         role: inviteRole,
       });
       toast.success('Invite created');
@@ -204,6 +207,11 @@ export function OrgTeam() {
       <div className="border-b border-[var(--border)]" />
 
       {/* Pending invites */}
+      {invitesError && (
+        <div className="rounded-2xl bg-red-50 border border-red-200 p-4">
+          <p className="text-sm text-red-700">Failed to load pending invites. They may still exist.</p>
+        </div>
+      )}
       {showInvites && pendingInvites.length > 0 && (
         <div className="rounded-2xl bg-amber-50 border border-amber-200 p-4 space-y-3">
           <h4 className="text-sm font-semibold text-amber-800">Pending Invites</h4>
@@ -216,8 +224,16 @@ export function OrgTeam() {
               </span>
               <button
                 type="button"
-                onClick={() => revokeInvite.mutate(inv.id)}
-                className="text-xs text-red-600 hover:underline"
+                onClick={async () => {
+                  try {
+                    await revokeInvite.mutateAsync(inv.id);
+                    toast.success('Invite revoked');
+                  } catch (err) {
+                    toast.error(err instanceof Error ? err.message : 'Failed to revoke invite');
+                  }
+                }}
+                disabled={revokeInvite.isPending}
+                className="text-xs text-red-600 hover:underline disabled:opacity-50"
               >
                 Revoke
               </button>
@@ -381,7 +397,7 @@ export function OrgTeam() {
                     <input readOnly value={inviteLink} className={`${inputCls} text-xs font-mono`} />
                     <button
                       type="button"
-                      onClick={() => navigator.clipboard.writeText(inviteLink)}
+                      onClick={() => navigator.clipboard.writeText(inviteLink).then(() => toast.success('Copied to clipboard')).catch(() => toast.error('Failed to copy — please copy manually'))}
                       className="shrink-0 px-3 py-2 bg-slate-900 text-white text-xs rounded-xl hover:bg-black transition-colors"
                     >
                       Copy
@@ -401,6 +417,10 @@ export function OrgTeam() {
                 <div>
                   <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Name (optional)</label>
                   <input value={inviteName} onChange={(e) => setInviteName(e.target.value)} placeholder="Kwame Asante" className={inputCls} />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">WhatsApp Phone (optional)</label>
+                  <input value={invitePhone} onChange={(e) => setInvitePhone(e.target.value)} placeholder="+233… or 024…" className={inputCls} />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Role</label>

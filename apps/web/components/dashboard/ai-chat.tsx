@@ -1,7 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { useAiQuery, type AiQueryResult, type AiChatMessage } from '@/lib/hooks/use-project-queries';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useAiQuery,
+  useAiChatHistory,
+  useClearAiChatHistory,
+  type AiQueryResult,
+  type AiChatHistoryMessage,
+} from '@/lib/hooks/use-project-queries';
 import { useAuth } from '@/lib/auth-context';
 
 type Message = {
@@ -84,14 +90,45 @@ const SUGGESTION_CHIPS = [
   'Show attendance trends for the last 30 days',
 ];
 
+function historyToMessages(history: AiChatHistoryMessage[]): Message[] {
+  return history.map((m) => ({
+    id: m.id,
+    role: m.role as 'user' | 'assistant',
+    content: m.content,
+    data: m.resultData
+      ? {
+          answer: m.content,
+          sql: m.sqlQuery ?? '',
+          rows: m.resultData.rows,
+          rowCount: m.resultData.rowCount,
+          error: null,
+        }
+      : undefined,
+    timestamp: new Date(m.createdAt),
+  }));
+}
+
 export function AiChat() {
   const { user } = useAuth();
   const query = useAiQuery();
-  const [messages, setMessages] = useState<Message[]>([]);
+  const { data: historyData, isLoading: historyLoading, isError: historyError } = useAiChatHistory();
+  const clearHistory = useClearAiChatHistory();
+  const [optimisticMessages, setOptimisticMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [expandedData, setExpandedData] = useState<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  const serverMessages = useMemo(
+    () => (historyData ? historyToMessages(historyData) : []),
+    [historyData],
+  );
+
+  const messages = useMemo(() => {
+    const serverIds = new Set(serverMessages.map((m) => m.id));
+    const pending = optimisticMessages.filter((m) => !serverIds.has(m.id));
+    return [...serverMessages, ...pending];
+  }, [serverMessages, optimisticMessages]);
 
   const scrollToBottom = useCallback(() => {
     setTimeout(() => {
@@ -101,11 +138,11 @@ export function AiChat() {
 
   useEffect(() => { scrollToBottom(); }, [messages.length, scrollToBottom]);
 
-  function buildHistory(): AiChatMessage[] {
-    return messages
-      .filter((m) => m.role === 'user' || (m.role === 'assistant' && m.content))
-      .map((m) => ({ role: m.role, content: m.content }));
-  }
+  useEffect(() => {
+    if (historyData) {
+      setOptimisticMessages([]);
+    }
+  }, [historyData]);
 
   async function handleSend(text?: string) {
     const q = (text ?? input).trim();
@@ -113,34 +150,53 @@ export function AiChat() {
     setInput('');
 
     const userMsg: Message = {
-      id: `user-${Date.now()}`,
+      id: `pending-user-${Date.now()}`,
       role: 'user',
       content: q,
       timestamp: new Date(),
     };
-    setMessages((prev) => [...prev, userMsg]);
-
-    const history = buildHistory();
+    setOptimisticMessages((prev) => [...prev, userMsg]);
 
     try {
-      const result = await query.mutateAsync({ question: q, history });
-      const assistantMsg: Message = {
-        id: `assistant-${Date.now()}`,
-        role: 'assistant',
-        content: result.answer,
-        data: result,
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, assistantMsg]);
+      const result = await query.mutateAsync({ question: q });
+
+      if (result.error) {
+        const assistantMsg: Message = {
+          id: `pending-error-${Date.now()}`,
+          role: 'assistant',
+          content: result.answer,
+          timestamp: new Date(),
+        };
+        setOptimisticMessages((prev) => [...prev, assistantMsg]);
+      } else {
+        const assistantMsg: Message = {
+          id: `pending-assistant-${Date.now()}`,
+          role: 'assistant',
+          content: result.answer,
+          data: result,
+          timestamp: new Date(),
+        };
+        setOptimisticMessages((prev) => [...prev, assistantMsg]);
+      }
     } catch (err) {
       const errorMsg: Message = {
-        id: `error-${Date.now()}`,
+        id: `pending-err-${Date.now()}`,
         role: 'assistant',
-        content: err instanceof Error ? err.message : 'Something went wrong. Please try again.',
+        content: err instanceof Error
+          ? (err.message.includes('timed out')
+            ? "I'm taking too long to respond. Please try again."
+            : 'Something went wrong. Please try again.')
+          : 'Something went wrong. Please try again.',
         timestamp: new Date(),
       };
-      setMessages((prev) => [...prev, errorMsg]);
+      setOptimisticMessages((prev) => [...prev, errorMsg]);
     }
+  }
+
+  function handleNewChat() {
+    clearHistory.mutate();
+    setOptimisticMessages([]);
+    setExpandedData(new Set());
   }
 
   function toggleData(id: string) {
@@ -160,12 +216,48 @@ export function AiChat() {
   }
 
   const isThinking = query.isPending;
+  const hasMessages = messages.length > 0;
+
+  if (historyLoading) {
+    return (
+      <div className="flex flex-col h-full items-center justify-center">
+        <div className="flex gap-1.5 items-center">
+          <div className="w-2 h-2 rounded-full bg-slate-400 animate-bounce [animation-delay:0ms]" />
+          <div className="w-2 h-2 rounded-full bg-slate-400 animate-bounce [animation-delay:150ms]" />
+          <div className="w-2 h-2 rounded-full bg-slate-400 animate-bounce [animation-delay:300ms]" />
+          <span className="text-sm text-[var(--text-muted)] ml-2">Loading conversation...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full">
+      {/* Header with New Chat */}
+      {hasMessages && (
+        <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-[var(--border)]">
+          <h3 className="text-sm font-semibold text-[var(--text-primary)]">AI Assistant</h3>
+          <button
+            type="button"
+            onClick={handleNewChat}
+            disabled={clearHistory.isPending}
+            className="px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)] border border-[var(--border)] rounded-lg hover:bg-slate-50 transition-colors disabled:opacity-50"
+          >
+            {clearHistory.isPending ? 'Clearing...' : 'New Chat'}
+          </button>
+        </div>
+      )}
+
+      {/* Error banner if history failed to load */}
+      {historyError && (
+        <div className="px-4 sm:px-6 py-2 bg-amber-50 border-b border-amber-200">
+          <p className="text-xs text-amber-700">Could not load previous messages. New messages will still be saved.</p>
+        </div>
+      )}
+
       {/* Chat messages area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 sm:px-6 py-6">
-        {messages.length === 0 ? (
+        {!hasMessages ? (
           <div className="flex flex-col items-center justify-center h-full max-w-lg mx-auto text-center">
             <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center mb-5">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -234,14 +326,16 @@ export function AiChat() {
                       {expandedData.has(msg.id) && (
                         <div className="mt-2 space-y-2">
                           <DataTable rows={msg.data.rows} />
-                          <details className="group">
-                            <summary className="text-[11px] text-[var(--text-muted)] cursor-pointer hover:text-[var(--text-secondary)]">
-                              SQL query
-                            </summary>
-                            <pre className="mt-1 p-2 bg-slate-50 rounded-lg text-[11px] overflow-x-auto font-mono text-slate-600">
-                              {msg.data.sql}
-                            </pre>
-                          </details>
+                          {msg.data.sql && (
+                            <details className="group">
+                              <summary className="text-[11px] text-[var(--text-muted)] cursor-pointer hover:text-[var(--text-secondary)]">
+                                SQL query
+                              </summary>
+                              <pre className="mt-1 p-2 bg-slate-50 rounded-lg text-[11px] overflow-x-auto font-mono text-slate-600">
+                                {msg.data.sql}
+                              </pre>
+                            </details>
+                          )}
                         </div>
                       )}
                     </div>

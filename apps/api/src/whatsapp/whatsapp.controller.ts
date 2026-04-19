@@ -35,7 +35,7 @@ export class WhatsAppController {
       this.logger.log('Webhook verification successful');
       return res.status(200).type('text/plain').send(challenge);
     }
-    this.logger.warn(`Webhook verify FAILED — mode=${mode}, receivedToken=${token}, configuredToken=${env.WHATSAPP_VERIFY_TOKEN ?? 'NOT SET'}`);
+    this.logger.warn(`Webhook verify FAILED — mode=${mode}, tokenMatch=false, configured=${env.WHATSAPP_VERIFY_TOKEN ? 'YES' : 'NOT SET'}`);
     return res.status(403).send();
   }
 
@@ -45,8 +45,17 @@ export class WhatsAppController {
     @Req() req: RawBodyRequest<Request>,
     @Headers('x-hub-signature-256') signature: string | undefined,
   ) {
+    // ⚑ Log FIRST — before any validation — so every Meta POST is visible in Render logs
+    this.logger.log(
+      `WhatsApp POST webhook hit — has-signature=${!!signature}, rawBody-length=${req.rawBody?.length ?? 'null'}`,
+    );
+
     const raw = req.rawBody;
     if (!raw?.length) {
+      this.logger.error(
+        'rawBody is missing or empty. Ensure NestFactory is created with { rawBody: true } ' +
+        'and no middleware is consuming the body stream before NestJS body-parser runs.',
+      );
       throw new BadRequestException('Missing raw body for webhook verification');
     }
     if (!this.webhook.verifySignature(raw, signature)) {
@@ -54,7 +63,7 @@ export class WhatsAppController {
       throw new ForbiddenException('Invalid signature');
     }
     const body = req.body as WhatsAppWebhookPayload;
-    this.logger.log(`Inbound webhook received — object=${body?.object ?? 'unknown'}, entries=${body?.entry?.length ?? 0}`);
+    this.logger.log(`Inbound webhook accepted — object=${body?.object ?? 'unknown'}, entries=${body?.entry?.length ?? 0}`);
     const ok = await this.webhook.enqueue(body);
     if (!ok) {
       this.logger.error('Failed to enqueue webhook — pg-boss unavailable');

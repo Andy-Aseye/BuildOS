@@ -1,9 +1,11 @@
-import { Injectable, BadRequestException, UnauthorizedException } from '@nestjs/common';
+import { Injectable, BadRequestException, UnauthorizedException, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma.module';
 import { supabaseAdmin } from './supabase';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async register(data: { email: string; password: string; name: string; companyName: string }) {
@@ -13,7 +15,10 @@ export class AuthService {
       email_confirm: true,
     });
 
-    if (error) throw new BadRequestException(error.message);
+    if (error) {
+      this.logger.warn(`Registration failed for ${data.email}: ${error.message}`);
+      throw new BadRequestException('Registration failed. Please check your details and try again.');
+    }
 
     const slug = data.companyName
       .toLowerCase()
@@ -42,7 +47,10 @@ export class AuthService {
       password: data.password,
     });
 
-    if (signInError) throw new BadRequestException(signInError.message);
+    if (signInError) {
+      this.logger.warn(`Post-registration sign-in failed for ${data.email}: ${signInError.message}`);
+      throw new BadRequestException('Account created but sign-in failed. Please try logging in.');
+    }
 
     return {
       tenant,
@@ -59,7 +67,10 @@ export class AuthService {
       password: data.password,
     });
 
-    if (error) throw new UnauthorizedException(error.message);
+    if (error) {
+      this.logger.warn(`Login failed for ${data.email}: ${error.message}`);
+      throw new UnauthorizedException('Invalid email or password.');
+    }
 
     return {
       accessToken: session.session.access_token,
@@ -82,12 +93,16 @@ export class AuthService {
       password: data.password,
       email_confirm: true,
     });
-    if (error) throw new BadRequestException(error.message);
+    if (error) {
+      this.logger.warn(`Invite acceptance failed for ${invite.email}: ${error.message}`);
+      throw new BadRequestException('Could not create your account. The email may already be registered.');
+    }
 
     const user = await this.prisma.user.create({
       data: {
         tenantId: invite.tenantId,
         email: invite.email,
+        whatsappPhone: invite.phone || null,
         name: data.name,
         role: invite.role,
       },
@@ -106,7 +121,10 @@ export class AuthService {
       email: invite.email,
       password: data.password,
     });
-    if (signInError) throw new BadRequestException(signInError.message);
+    if (signInError) {
+      this.logger.warn(`Post-invite sign-in failed for ${invite.email}: ${signInError.message}`);
+      throw new BadRequestException('Account created but sign-in failed. Please try logging in.');
+    }
 
     return {
       tenant: invite.tenant,

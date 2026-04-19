@@ -17,9 +17,9 @@ async function bootstrap() {
     origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
       const allowed = [
         env.FRONTEND_URL,
-        'http://localhost:3000',
+        ...(env.NODE_ENV === 'development' ? ['http://localhost:3000'] : []),
       ];
-      if (!origin || allowed.includes(origin) || /\.vercel\.app$/.test(origin) || /\.onrender\.com$/.test(origin) || /\.netlify\.app$/.test(origin)) {
+      if (!origin || allowed.includes(origin)) {
         callback(null, true);
       } else {
         callback(new Error(`CORS blocked: ${origin}`));
