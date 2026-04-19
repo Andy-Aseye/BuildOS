@@ -31,8 +31,8 @@ export function ProjectHeader({ projectId }: { projectId: string }) {
     return (
       <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
         {error instanceof Error ? error.message : 'Project not found.'}{' '}
-        <Link href="/" className="font-medium underline">
-          Back to portfolio
+        <Link href="/projects" className="font-medium underline">
+          Back to projects
         </Link>
       </div>
     );

@@ -18,6 +18,7 @@ export class ProjectsService {
       where: { tenantId, deletedAt: null },
       include: {
         members: { include: { user: { select: { id: true, name: true, role: true } } } },
+        phases: { select: { id: true, percentComplete: true }, orderBy: { order: 'asc' } },
         _count: { select: { costEntries: true, dailyLogs: true } },
       },
       orderBy: { createdAt: 'desc' },

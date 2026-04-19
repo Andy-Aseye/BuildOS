@@ -89,7 +89,7 @@ export function ProjectOverview({ projectId }: { projectId: string }) {
           icon={<ActivityIcon />}
           label="Status"
           value={project.status.replace(/_/g, ' ')}
-          color={project.status === 'IN_PROGRESS' ? 'green' : project.status === 'COMPLETED' ? 'blue' : 'amber'}
+          color={project.status === 'ACTIVE' ? 'green' : project.status === 'COMPLETED' ? 'green' : project.status === 'CANCELLED' ? 'slate' : 'amber'}
         />
         <StatCard
           icon={<CalendarIcon />}

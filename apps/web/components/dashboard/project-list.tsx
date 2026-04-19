@@ -4,8 +4,11 @@ import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from 'next/link';
 import { api } from '@/lib/api-client';
-import { PageHeader } from '@/components/ui/page-header';
 import { EmptyState } from '@/components/ui/empty-state';
+
+type ProjectMember = {
+  user: { id: string; name: string | null; role: string };
+};
 
 export type ProjectListItem = {
   id: string;
@@ -13,6 +16,8 @@ export type ProjectListItem = {
   name: string;
   clientName: string;
   status: string;
+  members?: ProjectMember[];
+  phases?: { id: string; percentComplete: number }[];
   _count?: { costEntries: number; dailyLogs: number };
 };
 
@@ -21,7 +26,6 @@ type EnrichedProject = ProjectListItem & {
   managerName: string;
   managerRole: string;
   managerInitials: string;
-  location: string;
   completion: number;
 };
 
@@ -29,15 +33,28 @@ const COVER_IMAGES = [
   'https://images.unsplash.com/photo-1504307651254-35680f356dfd?w=600&q=80',
   'https://images.unsplash.com/photo-1541888946425-d81bb19240f5?w=600&q=80',
   'https://images.unsplash.com/photo-1503387762-592deb58ef4e?w=600&q=80',
+  'https://images.unsplash.com/photo-1565008447742-97f6f38c985c?w=600&q=80',
+  'https://images.unsplash.com/photo-1567521464027-f127ff144326?w=600&q=80',
+  'https://images.unsplash.com/photo-1585776245991-cf89dd7fc73a?w=600&q=80',
 ];
 
-function statusToCompletion(status: string): number {
+function pickCoverImage(id: string): string {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0;
+  }
+  return COVER_IMAGES[Math.abs(hash) % COVER_IMAGES.length];
+}
+
+function statusToCompletion(status: string, phases?: { percentComplete: number }[]): number {
+  if (phases?.length) {
+    const sum = phases.reduce((acc, p) => acc + p.percentComplete, 0);
+    return Math.round(sum / phases.length);
+  }
   switch (status.toUpperCase()) {
-    case 'PLANNING': return 10;
-    case 'IN_PROGRESS': return 45;
-    case 'ON_HOLD': return 30;
     case 'COMPLETED': return 100;
-    default: return 20;
+    case 'CANCELLED': return 0;
+    default: return 0;
   }
 }
 
@@ -57,7 +74,6 @@ function ProjectCardSkeleton() {
           </div>
           <div className="h-1.5 w-full rounded-full bg-slate-200 animate-pulse" />
         </div>
-        <div className="h-3 w-2/5 rounded bg-slate-200 animate-pulse" />
         <div className="mt-auto pt-4 border-t border-[var(--border)] flex items-center gap-3">
           <div className="h-8 w-8 rounded-full bg-slate-200 animate-pulse shrink-0" />
           <div className="space-y-1.5 flex-1">
@@ -93,13 +109,21 @@ function ProjectCardSkeletonGrid() {
   );
 }
 
+const STATUS_BADGE_COLOR: Record<string, string> = {
+  ACTIVE: 'bg-emerald-50 text-emerald-700',
+  ON_HOLD: 'bg-slate-100 text-slate-600',
+  COMPLETED: 'bg-blue-50 text-blue-700',
+  CANCELLED: 'bg-slate-100 text-slate-500',
+};
+
 function ProjectCard({ project }: { project: EnrichedProject }) {
+  const badgeCls = STATUS_BADGE_COLOR[project.status] ?? 'bg-slate-100 text-slate-600';
+
   return (
     <Link
       href={`/projects/${project.id}`}
       className="group flex flex-col h-full rounded-2xl bg-[var(--card-bg)] shadow-sm hover:shadow-md transition-all duration-200 overflow-hidden border border-[var(--border)]"
     >
-      {/* Image */}
       <div className="relative h-44 w-full bg-slate-100 overflow-hidden">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
@@ -108,7 +132,7 @@ function ProjectCard({ project }: { project: EnrichedProject }) {
           className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
         />
         <div className="absolute top-3 left-3">
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-white/90 text-[var(--primary)] shadow-sm backdrop-blur-sm">
+          <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold shadow-sm backdrop-blur-sm ${badgeCls}`}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
             </svg>
@@ -117,14 +141,12 @@ function ProjectCard({ project }: { project: EnrichedProject }) {
         </div>
       </div>
 
-      {/* Body */}
       <div className="flex flex-col flex-1 p-5">
         <h3 className="font-semibold text-base text-[var(--text-primary)] leading-snug mb-1">
           {project.name}
         </h3>
         <p className="text-xs text-[var(--text-muted)] mb-4">{project.clientName}</p>
 
-        {/* Completion */}
         <div className="mb-4">
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-xs font-medium text-[var(--text-secondary)]">Completion</span>
@@ -138,25 +160,17 @@ function ProjectCard({ project }: { project: EnrichedProject }) {
           </div>
         </div>
 
-        {/* Location */}
-        <div className="flex items-center gap-1.5 text-xs text-[var(--text-muted)] mb-5">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
-            <circle cx="12" cy="10" r="3" />
-          </svg>
-          {project.location}
-        </div>
-
-        {/* Manager */}
-        <div className="mt-auto pt-4 border-t border-[var(--border)] flex items-center gap-3">
-          <div className="h-8 w-8 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[11px] font-semibold shrink-0">
-            {project.managerInitials}
+        {project.managerName && (
+          <div className="mt-auto pt-4 border-t border-[var(--border)] flex items-center gap-3">
+            <div className="h-8 w-8 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[11px] font-semibold shrink-0">
+              {project.managerInitials}
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-[var(--text-primary)] truncate">{project.managerName}</p>
+              <p className="text-[11px] text-[var(--text-muted)]">{project.managerRole}</p>
+            </div>
           </div>
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-[var(--text-primary)] truncate">{project.managerName}</p>
-            <p className="text-[11px] text-[var(--text-muted)]">{project.managerRole}</p>
-          </div>
-        </div>
+        )}
       </div>
     </Link>
   );
@@ -173,19 +187,25 @@ export function ProjectList() {
 
   const enrichedData: EnrichedProject[] = useMemo(
     () =>
-      (data ?? []).map((p, i) => ({
-        ...p,
-        imageUrl: COVER_IMAGES[i % COVER_IMAGES.length],
-        managerName: i % 2 === 0 ? 'Padhang Satrio' : 'Leonardo Samsul',
-        managerRole: 'Project Manager',
-        managerInitials: i % 2 === 0 ? 'PS' : 'LS',
-        location: i % 2 === 0 ? 'Accra, Ghana' : 'Kumasi, Ghana',
-        completion: statusToCompletion(p.status),
-      })),
+      (data ?? []).map((p) => {
+        const pm = p.members?.find((m) => m.user.role === 'PROJECT_MANAGER') ?? p.members?.[0];
+        const name = pm?.user.name ?? '';
+        const initials = name
+          ? name.split(' ').filter(Boolean).map((w) => w[0]).join('').slice(0, 2).toUpperCase()
+          : '';
+        return {
+          ...p,
+          imageUrl: pickCoverImage(p.id),
+          managerName: name,
+          managerRole: pm?.user.role.replace(/_/g, ' ') ?? '',
+          managerInitials: initials,
+          completion: statusToCompletion(p.status, p.phases),
+        };
+      }),
     [data],
   );
 
-  const STATUS_FILTERS = ['ALL', 'PLANNING', 'IN_PROGRESS', 'ON_HOLD', 'COMPLETED'];
+  const STATUS_FILTERS = ['ALL', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'CANCELLED'];
 
   const filtered = useMemo(() => {
     let list = enrichedData;

@@ -307,7 +307,7 @@ export function ProjectRfis({ projectId }: { projectId: string }) {
                             >
                               {STATUSES.map((s) => (
                                 <option key={s} value={s}>
-                                  {s}
+                                  {s.replace(/_/g, ' ')}
                                 </option>
                               ))}
                             </select>

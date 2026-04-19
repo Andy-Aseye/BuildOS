@@ -107,7 +107,7 @@ export function EditProjectForm({ projectId }: { projectId: string }) {
           <div>
             <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Status</label>
             <select value={status} onChange={(e) => setStatus(e.target.value)} className={inputCls}>
-              {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+              {STATUSES.map((s) => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
             </select>
           </div>
 
@@ -162,7 +162,7 @@ export function EditProjectForm({ projectId }: { projectId: string }) {
               type="button"
               disabled={deleteProject.isPending}
               onClick={() => {
-                if (window.confirm('Archive this project? It will be hidden from active lists.')) {
+                if (window.confirm('Archive this project? It will no longer appear in project lists but can be restored later.')) {
                   void deleteProject.mutate();
                 }
               }}

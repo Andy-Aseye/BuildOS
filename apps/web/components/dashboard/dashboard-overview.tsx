@@ -85,19 +85,17 @@ function UsersIcon() {
 /* ── Status Distribution (donut chart via SVG) ──────────────── */
 
 const STATUS_COLORS: Record<string, string> = {
-  ACTIVE: '#6366f1',
-  PLANNING: '#3b82f6',
-  IN_PROGRESS: '#f59e0b',
+  ACTIVE: '#10b981',
   ON_HOLD: '#fb923c',
-  COMPLETED: '#10b981',
+  COMPLETED: '#6366f1',
+  CANCELLED: '#94a3b8',
 };
 
 const STATUS_LABELS: Record<string, string> = {
   ACTIVE: 'Active',
-  PLANNING: 'Planning',
-  IN_PROGRESS: 'In Progress',
   ON_HOLD: 'On Hold',
   COMPLETED: 'Completed',
+  CANCELLED: 'Cancelled',
 };
 
 function StatusDonut({ projects }: { projects: ProjectSummary[] }) {
@@ -313,7 +311,7 @@ export function DashboardOverview() {
         <StatCard icon={<ZapIcon />} label="Active Projects" value={activeProjects} color="green" loading={loadingProjects} />
         <StatCard
           icon={<AlertIcon />}
-          label="Open Items"
+          label="Open Tasks"
           value={openCount}
           trend={overdueCount > 0 ? `${overdueCount} overdue` : undefined}
           color="amber"
@@ -385,7 +383,7 @@ export function DashboardOverview() {
 
         <div className="lg:col-span-1">
           <SectionCard
-            title="Open Items"
+            title="Open Tasks"
             subtitle={`${openCount} open`}
             actions={
               <Link href="/open-items" className="text-xs font-medium text-[var(--primary)] hover:underline">
@@ -394,7 +392,7 @@ export function DashboardOverview() {
             }
           >
             {loadingOpenRfis ? <CardSpinner /> : !openRfis?.length ? (
-              <CardEmpty message="No open items" />
+              <CardEmpty message="No open tasks" />
             ) : (
               <div className="divide-y divide-[var(--border)]">
                 {openRfis.slice(0, 5).map((rfi) => (
