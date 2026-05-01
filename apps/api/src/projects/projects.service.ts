@@ -4,6 +4,9 @@ import { CreateProjectDto, UpdateProjectDto, AddMemberDto } from './projects.dto
 import { UserRole } from '@prisma/client';
 import { BudgetAlertService } from '../costs/budget-alert.service';
 import { WhatsAppCloudService } from '../whatsapp/whatsapp-cloud.service';
+import { seqToCode } from '../common/code-sequence';
+import { EmailService } from '../email/email.service';
+import { env } from '../config/env';
 
 @Injectable()
 export class ProjectsService {
@@ -13,6 +16,7 @@ export class ProjectsService {
     private readonly prisma: PrismaService,
     private readonly budgetAlerts: BudgetAlertService,
     private readonly whatsapp: WhatsAppCloudService,
+    private readonly email: EmailService,
   ) {}
 
   async findAll(tenantId: string) {
@@ -41,21 +45,32 @@ export class ProjectsService {
   }
 
   async create(tenantId: string, data: CreateProjectDto) {
-    const code = await this.generateCode(tenantId, data.name);
+    // Allocate the project code atomically inside the same transaction that
+    // creates the project. The Postgres-level row lock on `tenants.id` during
+    // the UPDATE serializes concurrent allocators for the same tenant, so two
+    // requests can never receive the same code (the C4 collision bug).
+    return this.prisma.$transaction(async (tx) => {
+      const tenant = await tx.tenant.update({
+        where: { id: tenantId },
+        data: { nextProjectSeq: { increment: 1 } },
+        select: { companyCode: true, nextProjectSeq: true },
+      });
+      const code = `${tenant.companyCode}${seqToCode(tenant.nextProjectSeq)}`;
 
-    return this.prisma.project.create({
-      data: {
-        tenantId,
-        code,
-        name: data.name,
-        clientName: data.clientName,
-        description: data.description,
-        budgetGhs: data.budgetGhs,
-        budgetUsd: data.budgetUsd,
-        fxRateGhsUsd: data.fxRateGhsUsd,
-        startDate: data.startDate ? new Date(data.startDate) : undefined,
-        expectedEndDate: data.expectedEndDate ? new Date(data.expectedEndDate) : undefined,
-      },
+      return tx.project.create({
+        data: {
+          tenantId,
+          code,
+          name: data.name,
+          clientName: data.clientName,
+          description: data.description,
+          budgetGhs: data.budgetGhs,
+          budgetUsd: data.budgetUsd,
+          fxRateGhsUsd: data.fxRateGhsUsd,
+          startDate: data.startDate ? new Date(data.startDate) : undefined,
+          expectedEndDate: data.expectedEndDate ? new Date(data.expectedEndDate) : undefined,
+        },
+      });
     });
   }
 
@@ -102,10 +117,14 @@ export class ProjectsService {
 
     const project = await this.prisma.project.findFirst({
       where: { id: projectId, tenantId, deletedAt: null },
-      select: { id: true, code: true, name: true },
+      select: { id: true, code: true, name: true, tenant: { select: { name: true } } },
     });
     if (!project) throw new NotFoundException('Project not found');
 
+    // Track whether we created a fresh user record in this call. Only brand-new
+    // users (with an email and no Supabase auth yet) get the D3 invite email —
+    // existing members already received their welcome.
+    let createdNewUser = false;
     let user;
     if (data.userId) {
       user = await this.prisma.user.findFirst({
@@ -121,10 +140,12 @@ export class ProjectsService {
           data: {
             tenantId,
             whatsappPhone: data.phone!,
+            email: data.email,
             name: data.name,
             role: data.role as UserRole,
           },
         });
+        createdNewUser = true;
       }
     }
 
@@ -143,6 +164,28 @@ export class ProjectsService {
       void this.sendProjectWelcome(phone, project.code, project.name).catch((err) => {
         this.logger.warn(`Welcome WhatsApp to ${phone} for ${project.code} failed: ${err}`);
       });
+    }
+
+    // D3 — fire a project-invite email if the user was *just* created in this
+    // call AND we have an email to send to. We rely on `createdNewUser` (vs.
+    // checking `lastActiveAt`) because that is the only signal that the user
+    // has never logged into BuildOS before; existing users with an email may
+    // already be active members of other projects.
+    const emailTarget = data.email ?? user.email ?? null;
+    if (createdNewUser && emailTarget) {
+      void this.email
+        .sendProjectInvite({
+          to: emailTarget,
+          name: data.name ?? null,
+          orgName: project.tenant.name,
+          projectCode: project.code,
+          projectName: project.name,
+          role: data.role,
+          setupUrl: `${env.FRONTEND_URL}/setup?project=${encodeURIComponent(project.code)}`,
+        })
+        .catch((err) =>
+          this.logger.warn(`Project invite email to ${emailTarget} for ${project.code} failed: ${err}`),
+        );
     }
 
     return member;
@@ -164,17 +207,5 @@ export class ProjectsService {
       where: { projectId_userId: { projectId, userId } },
       data: { leftAt: new Date() },
     });
-  }
-
-  private async generateCode(tenantId: string, projectName: string): Promise<string> {
-    const tenant = await this.prisma.tenant.findUniqueOrThrow({ where: { id: tenantId } });
-    const prefix = tenant.slug.slice(0, 3).toUpperCase();
-    const count = await this.prisma.project.count({ where: { tenantId } });
-    const code = `${prefix}-${String(count + 1).padStart(2, '0')}`;
-
-    const exists = await this.prisma.project.findUnique({ where: { code } });
-    if (exists) return `${prefix}-${String(count + 2).padStart(2, '0')}`;
-
-    return code;
   }
 }

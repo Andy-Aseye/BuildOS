@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsEnum, IsNumber, IsDateString, IsUUID, MinLength, MaxLength, ValidateIf } from 'class-validator';
+import { IsString, IsOptional, IsEnum, IsNumber, IsDateString, IsUUID, MinLength, MaxLength, ValidateIf, IsEmail } from 'class-validator';
 import { Type } from 'class-transformer';
 
 enum ProjectStatus {
@@ -107,4 +107,13 @@ export class AddMemberDto {
   @IsOptional()
   @IsString()
   name?: string;
+
+  /**
+   * Optional email address. When provided AND the user is brand-new (not yet
+   * a member of the org), D3 fires a project-invite email with a setup link.
+   * For existing users, only the WhatsApp greeting is sent.
+   */
+  @IsOptional()
+  @IsEmail()
+  email?: string;
 }

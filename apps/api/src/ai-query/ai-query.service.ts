@@ -1,9 +1,68 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { PrismaClient } from '@prisma/client';
 import OpenAI from 'openai';
 import { PrismaService } from '../prisma.module';
 import { env } from '../config/env';
 
 const LLM_TIMEOUT_MS = 15_000;
+
+/**
+ * Allowlist of v_* views the NL→SQL pipeline is permitted to read from. Any
+ * FROM/JOIN target outside this set is rejected. Mirrors the views created in
+ * 20260418120000_add_ai_query_views and granted to buildos_app_readonly in
+ * 20260430234207_buildos_app_roles.
+ */
+const ALLOWED_VIEWS = new Set<string>([
+  'v_projects',
+  'v_users',
+  'v_cost_entries',
+  'v_rfis',
+  'v_daily_logs',
+  'v_daily_log_photos',
+  'v_attendance_logs',
+  'v_materials_requests',
+  'v_materials_request_items',
+  'v_delay_logs',
+  'v_progress_reports',
+  'v_drawing_reviews',
+  'v_drawing_revisions',
+  'v_project_phases',
+  'v_project_members',
+  'v_project_budget_alert_state',
+  'v_project_files',
+  'v_invites',
+  'v_notifications',
+  'v_audit_logs',
+]);
+
+/**
+ * Identifier-level denylist. Any whole-word match in the post-stripped SQL is
+ * rejected. The set covers privilege escalation, tenant-bypass, and information
+ * disclosure vectors that the LLM might be tricked into emitting.
+ */
+const FORBIDDEN_IDENTIFIERS = new Set<string>([
+  // DDL/DML
+  'INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'TRUNCATE', 'CREATE',
+  'GRANT', 'REVOKE', 'COPY', 'EXECUTE', 'CALL', 'DO',
+  // Session/role manipulation
+  'SET', 'RESET', 'SET_CONFIG', 'CURRENT_SETTING', 'SET_ROLE', 'RESET_ROLE',
+  // Locks/notifications/transactions
+  'LISTEN', 'NOTIFY', 'PREPARE', 'DEALLOCATE', 'CLUSTER', 'COMMENT', 'LOCK', 'VACUUM',
+  'BEGIN', 'COMMIT', 'ROLLBACK', 'SAVEPOINT', 'START',
+  // Set-combinator we forbid because they can dodge the outer tenant wrapper
+  'UNION', 'INTERSECT', 'EXCEPT',
+  // Recursive CTEs (can read system catalogs)
+  'RECURSIVE',
+  // FS / superuser-only functions
+  'PG_READ_FILE', 'PG_READ_BINARY_FILE', 'PG_LS_DIR', 'PG_LS_LOGDIR',
+  'PG_STAT_FILE', 'LO_IMPORT', 'LO_EXPORT', 'DBLINK',
+]);
+
+/**
+ * Prefix denylist — any identifier starting with these is rejected. Catches
+ * `pg_catalog.*`, `pg_class`, `information_schema.tables`, etc.
+ */
+const FORBIDDEN_PREFIXES = ['pg_', 'information_schema'];
 
 const SCHEMA_CONTEXT = `
 PostgreSQL schema for BuildOS. All views use snake_case columns — no quoting needed.
@@ -98,43 +157,115 @@ ${SCHEMA_CONTEXT}`;
 type Intent = 'sql' | 'explain' | 'chat';
 
 @Injectable()
-export class AiQueryService {
+export class AiQueryService implements OnModuleDestroy {
   private readonly logger = new Logger(AiQueryService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  /**
+   * Read-only Prisma client used exclusively for executing AI-generated SQL.
+   * Connects via BUILDOS_AIQUERY_DATABASE_URL — should point at the
+   * buildos_app_readonly role created in B2 (NOBYPASSRLS, SELECT only on v_*).
+   *
+   * If BUILDOS_AIQUERY_DATABASE_URL is unset, we fall back to the main client
+   * with the same parser hardening — works in dev, but production ops should
+   * provide a separate URL so the database itself enforces read-only.
+   */
+  private readonly aiQueryClient: PrismaClient;
+  private readonly usingDedicatedRoClient: boolean;
+
+  constructor(private readonly prisma: PrismaService) {
+    if (env.BUILDOS_AIQUERY_DATABASE_URL) {
+      this.aiQueryClient = new PrismaClient({
+        datasourceUrl: env.BUILDOS_AIQUERY_DATABASE_URL,
+      });
+      this.usingDedicatedRoClient = true;
+      this.logger.log('AI Query using dedicated read-only DATABASE_URL (buildos_app_readonly)');
+    } else {
+      this.aiQueryClient = prisma;
+      this.usingDedicatedRoClient = false;
+      this.logger.warn(
+        'BUILDOS_AIQUERY_DATABASE_URL not set — AI Query will use the main DB role. ' +
+          'For production, provision buildos_app_readonly and set BUILDOS_AIQUERY_DATABASE_URL.',
+      );
+    }
+  }
+
+  async onModuleDestroy() {
+    if (this.usingDedicatedRoClient) {
+      await this.aiQueryClient.$disconnect();
+    }
+  }
+
+  /**
+   * Strip SQL comments (line comments and block comments) and replace string
+   * literals with neutral placeholders. We do this BEFORE keyword checks so an
+   * attacker can't smuggle keywords inside string literals or behind comments.
+   */
+  private stripCommentsAndStrings(sql: string): string {
+    // Remove block comments first (non-nesting — Postgres allows nesting but we err on strict).
+    let out = sql.replace(/\/\*[\s\S]*?\*\//g, ' ');
+    // Remove line comments.
+    out = out.replace(/--[^\n]*/g, ' ');
+    // Replace single-quoted string literals (handle '' escapes).
+    out = out.replace(/'(?:[^']|'')*'/g, "''");
+    // Replace dollar-quoted strings ($tag$...$tag$). Conservative: any $...$ block.
+    out = out.replace(/\$([A-Za-z_]\w*)?\$[\s\S]*?\$\1\$/g, "''");
+    return out;
+  }
 
   private validateAndSanitizeSql(sql: string): string {
-    const upper = sql.toUpperCase();
-
-    const forbidden = [
-      'INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'TRUNCATE',
-      'CREATE', 'GRANT', 'REVOKE', 'COPY', 'EXECUTE', 'DO ',
-      'CALL', 'SET ', 'RESET', 'LISTEN', 'NOTIFY', 'PREPARE',
-      'DEALLOCATE', 'CLUSTER', 'COMMENT', 'LOCK', 'VACUUM',
-    ];
-
-    for (const kw of forbidden) {
-      const pattern = new RegExp(`\\b${kw.trim()}\\b`);
-      if (pattern.test(upper)) {
-        throw new BadRequestException(`Forbidden SQL keyword: ${kw.trim()}`);
-      }
-    }
-
-    if (!upper.startsWith('SELECT')) {
+    // Reject anything obviously not a SELECT first.
+    const trimmed = sql.trim();
+    if (!/^SELECT\b/i.test(trimmed) && !/^WITH\b/i.test(trimmed)) {
       throw new BadRequestException('Only SELECT queries are allowed');
     }
 
-    if (/;\s*\S/.test(sql)) {
+    if (/;\s*\S/.test(trimmed)) {
       throw new BadRequestException('Multiple SQL statements are not allowed');
     }
+    const cleaned = trimmed.replace(/;\s*$/, '');
+    const stripped = this.stripCommentsAndStrings(cleaned);
+    const upper = stripped.toUpperCase();
 
-    sql = sql.replace(/;\s*$/, '');
+    // Identifier-level denylist via word boundaries.
+    for (const kw of FORBIDDEN_IDENTIFIERS) {
+      // \b doesn't treat `_` as a boundary; we want `SET_CONFIG` to match `set_config(`.
+      // Use lookarounds for an alphanumeric/underscore boundary.
+      const pattern = new RegExp(`(^|[^A-Z0-9_])${kw}(?=[^A-Z0-9_]|$)`);
+      if (pattern.test(upper)) {
+        throw new BadRequestException(`Forbidden SQL keyword: ${kw}`);
+      }
+    }
 
-    if (!sql.includes('$1')) {
+    // Prefix denylist (pg_*, information_schema.*).
+    for (const prefix of FORBIDDEN_PREFIXES) {
+      const pattern = new RegExp(`(^|[^A-Z0-9_])${prefix.toUpperCase()}`, 'i');
+      if (pattern.test(stripped)) {
+        throw new BadRequestException(
+          `Forbidden identifier starting with "${prefix}" — system catalogs are off-limits`,
+        );
+      }
+    }
+
+    // Allowlist FROM/JOIN targets — every table reference must be a v_* view.
+    // We capture identifiers after FROM and JOIN keywords (skipping aliases like `AS x`).
+    const fromJoinRe = /\b(FROM|JOIN)\s+([A-Za-z_][\w.]*)/gi;
+    let match: RegExpExecArray | null;
+    while ((match = fromJoinRe.exec(stripped))) {
+      const ident = match[2];
+      // Strip schema prefix if any (e.g. "public.v_projects" → "v_projects").
+      const bare = ident.includes('.') ? ident.split('.').pop()! : ident;
+      if (!ALLOWED_VIEWS.has(bare.toLowerCase())) {
+        throw new BadRequestException(
+          `Forbidden table/view reference: "${bare}". Only v_* views are queryable from AI Query.`,
+        );
+      }
+    }
+
+    if (!cleaned.includes('$1')) {
       throw new BadRequestException('Query must include tenant filter ($1 parameter)');
     }
 
-    return sql;
+    return cleaned;
   }
 
   private async llmCall(
@@ -209,10 +340,18 @@ export class AiQueryService {
   }
 
   private async executeQuery(sql: string, tenantId: string): Promise<unknown[]> {
-    const result = await this.prisma.$queryRawUnsafe(
-      `SELECT * FROM (${sql}) AS _ai_result LIMIT 200`,
-      tenantId,
-    );
+    // Wrap the LLM-generated SQL in an outer SELECT * FROM (...) so we can:
+    //   1. Cap the row count regardless of what the LLM emitted.
+    //   2. Defang any trailing token the LLM might have appended after a comment.
+    const wrapped = `SELECT * FROM (${sql}) AS _ai_result LIMIT 200`;
+
+    // Run inside a transaction with set_config so RLS sees the tenant id even
+    // when buildos_app_readonly is in use (no BYPASSRLS). Batch tx pins the
+    // connection, so set_config and the SELECT share a session.
+    const [, result] = await this.aiQueryClient.$transaction([
+      this.aiQueryClient.$executeRaw`SELECT set_config('app.current_tenant_id', ${tenantId}, TRUE)`,
+      this.aiQueryClient.$queryRawUnsafe(wrapped, tenantId),
+    ]);
     return Array.isArray(result) ? result : [];
   }
 

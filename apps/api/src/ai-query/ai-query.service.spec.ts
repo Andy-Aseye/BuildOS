@@ -13,15 +13,22 @@ function buildService(overrides: {
   const llmResponses = [...(overrides.llmResponses ?? [])];
   let llmCallIndex = 0;
 
+  const queryRawUnsafe = overrides.queryError
+    ? jest.fn().mockRejectedValue(overrides.queryError)
+    : jest.fn().mockResolvedValue(overrides.queryResult ?? []);
+
   const mockPrisma = {
     aiChatMessage: {
       findMany: jest.fn().mockResolvedValue(overrides.dbHistory ?? []),
       create: jest.fn().mockResolvedValue({ id: 'msg-1' }),
       deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
-    $queryRawUnsafe: overrides.queryError
-      ? jest.fn().mockRejectedValue(overrides.queryError)
-      : jest.fn().mockResolvedValue(overrides.queryResult ?? []),
+    $queryRawUnsafe: queryRawUnsafe,
+    $executeRaw: jest.fn().mockResolvedValue(1),
+    // Batch transaction: resolve the array of in-flight calls in order.
+    $transaction: jest.fn().mockImplementation(async (calls: Array<Promise<unknown>>) =>
+      Promise.all(calls),
+    ),
   };
 
   const service = new AiQueryService(mockPrisma as never);
@@ -296,6 +303,71 @@ describe('AiQueryService', () => {
       const sql = "SELECT * FROM v_projects WHERE tenant_id = $1::uuid;";
       const result = validate(sql);
       expect(result.endsWith(';')).toBe(false);
+    });
+
+    it('should reject UNION attacks against other tenants', () => {
+      expect(() =>
+        validate(
+          "SELECT id FROM v_projects WHERE tenant_id = $1::uuid UNION SELECT id FROM v_projects",
+        ),
+      ).toThrow(/UNION/);
+    });
+
+    it('should reject pg_catalog references', () => {
+      expect(() =>
+        validate("SELECT * FROM pg_catalog.pg_user WHERE tenant_id = $1::uuid"),
+      ).toThrow(/pg_/);
+    });
+
+    it('should reject information_schema references', () => {
+      expect(() =>
+        validate("SELECT * FROM information_schema.tables WHERE tenant_id = $1::uuid"),
+      ).toThrow(/information_schema/);
+    });
+
+    it('should reject queries against unlisted tables', () => {
+      expect(() =>
+        validate("SELECT * FROM users WHERE tenant_id = $1::uuid"),
+      ).toThrow(/Forbidden table\/view reference/);
+    });
+
+    it('should reject set_config calls smuggled in', () => {
+      expect(() =>
+        validate(
+          "SELECT set_config('app.current_tenant_id', 'evil', false) FROM v_projects WHERE tenant_id = $1::uuid",
+        ),
+      ).toThrow(/SET_CONFIG|SET/);
+    });
+
+    it('should reject pg_read_file and similar superuser functions', () => {
+      expect(() =>
+        validate(
+          "SELECT pg_read_file('/etc/passwd') FROM v_projects WHERE tenant_id = $1::uuid",
+        ),
+      ).toThrow(/PG_READ_FILE|pg_/);
+    });
+
+    it('should reject WITH RECURSIVE CTEs', () => {
+      expect(() =>
+        validate(
+          "WITH RECURSIVE t AS (SELECT 1) SELECT * FROM v_projects WHERE tenant_id = $1::uuid",
+        ),
+      ).toThrow(/RECURSIVE/);
+    });
+
+    it('should not be fooled by keywords hidden in line comments', () => {
+      // The dangerous keyword is inside a line comment — should NOT trip the
+      // check, since stripCommentsAndStrings removes it. But the query is also
+      // missing a real FROM target, so it should still fail on allowlist.
+      expect(() =>
+        validate("SELECT 1 -- DROP TABLE projects\n FROM v_projects WHERE tenant_id = $1::uuid"),
+      ).not.toThrow();
+    });
+
+    it('should not be fooled by keywords hidden in string literals', () => {
+      const sql =
+        "SELECT id FROM v_projects WHERE tenant_id = $1::uuid AND name = 'DROP TABLE users'";
+      expect(validate(sql)).toBe(sql);
     });
   });
 });
