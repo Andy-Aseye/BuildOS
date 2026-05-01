@@ -14,6 +14,14 @@ model Tenant {
   id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name         String
   slug         String    @unique
+  /// Human-readable company code (A1..Z100, then AA1..). Issued atomically at
+  /// tenant creation by drawing from the global counter; immutable thereafter.
+  /// Combined with the per-project sequence to form the project code (e.g.
+  /// `${companyCode}${seqToCode(nextProjectSeq)}` = "A1A23").
+  companyCode    String  @unique
+  /// Monotonic per-tenant counter incremented inside the same transaction that
+  /// creates a new project. Drives project code allocation; never decremented.
+  nextProjectSeq Int     @default(0)
   logoUrl      String?
   primaryColor String?
   createdAt    DateTime  @default(now())
@@ -27,6 +35,17 @@ model Tenant {
   invites           Invite[]
 
   @@map("tenants")
+}
+
+/// Single-row-per-key counter used for monotonic, race-free sequence allocation
+/// outside of any single tenant — e.g. assigning new tenants their next
+/// `companyCode`. Updated via `UPDATE ... RETURNING value` so concurrent
+/// writers are serialized at the row level (Postgres MVCC).
+model GlobalCounter {
+  key   String @id
+  value Int    @default(0)
+
+  @@map("global_counters")
 }
 
 // ── Users ────────────────────────────────────────────────

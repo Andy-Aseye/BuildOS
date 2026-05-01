@@ -1,5 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { env } from '../config/env';
+import { inviteEmail, type InviteOpts } from './templates/invite';
+import { memberWelcomeEmail, type MemberWelcomeOpts } from './templates/member-welcome';
+import { ownerWelcomeEmail, type OwnerWelcomeOpts } from './templates/owner-welcome';
+import { progressReportEmail, type ProgressReportOpts } from './templates/progress-report';
+import { projectInviteEmail, type ProjectInviteOpts } from './templates/project-invite';
 
 type SendEmailInput = {
   to: string;
@@ -7,6 +12,18 @@ type SendEmailInput = {
   html: string;
 };
 
+/**
+ * Thin transport wrapper around Resend (Package D).
+ *
+ * All HTML lives in `./templates/*.ts`; this service is only responsible for
+ * (a) checking the API key is present, (b) firing the HTTP request, and (c)
+ * logging failures. Each `send*` method is a one-liner that hands a template's
+ * `{ subject, html }` to the underlying transport.
+ *
+ * Every method is fire-and-forget by convention — callers should not let an
+ * email failure block their main flow. We return a boolean so callers can
+ * still log, but no error propagates.
+ */
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
@@ -52,36 +69,33 @@ export class EmailService {
     }
   }
 
-  async sendInvite(opts: { to: string; inviterName: string; orgName: string; role: string; inviteUrl: string }) {
-    return this.send({
-      to: opts.to,
-      subject: `You've been invited to ${opts.orgName} on BuildOS`,
-      html: `
-        <div style="font-family:sans-serif;max-width:480px;margin:0 auto">
-          <h2 style="color:#0f172a">You're invited to join ${opts.orgName}</h2>
-          <p>${opts.inviterName} has invited you as <strong>${opts.role}</strong>.</p>
-          <a href="${opts.inviteUrl}" style="display:inline-block;padding:12px 24px;background:#0f172a;color:#fff;text-decoration:none;border-radius:8px;font-weight:600;margin:16px 0">
-            Accept Invitation
-          </a>
-          <p style="color:#64748b;font-size:14px">This link expires in 7 days.</p>
-        </div>
-      `,
-    });
+  // D1 — owner registration confirmation.
+  async sendOwnerWelcome(opts: OwnerWelcomeOpts) {
+    const { subject, html } = ownerWelcomeEmail(opts);
+    return this.send({ to: opts.to, subject, html });
   }
 
-  async sendReportDelivery(opts: { to: string; projectName: string; periodStart: string; periodEnd: string; reportUrl: string }) {
-    return this.send({
-      to: opts.to,
-      subject: `Progress Report: ${opts.projectName} (${opts.periodStart} – ${opts.periodEnd})`,
-      html: `
-        <div style="font-family:sans-serif;max-width:480px;margin:0 auto">
-          <h2 style="color:#0f172a">Progress Report</h2>
-          <p>A progress report for <strong>${opts.projectName}</strong> covering ${opts.periodStart} to ${opts.periodEnd} is ready.</p>
-          <a href="${opts.reportUrl}" style="display:inline-block;padding:12px 24px;background:#0f172a;color:#fff;text-decoration:none;border-radius:8px;font-weight:600;margin:16px 0">
-            View Report
-          </a>
-        </div>
-      `,
-    });
+  // D2 — post-invite signup confirmation.
+  async sendMemberWelcome(opts: MemberWelcomeOpts) {
+    const { subject, html } = memberWelcomeEmail(opts);
+    return this.send({ to: opts.to, subject, html });
+  }
+
+  // D3 — direct addMember (without prior invite link).
+  async sendProjectInvite(opts: ProjectInviteOpts) {
+    const { subject, html } = projectInviteEmail(opts);
+    return this.send({ to: opts.to, subject, html });
+  }
+
+  // Existing — invite link flow.
+  async sendInvite(opts: InviteOpts) {
+    const { subject, html } = inviteEmail(opts);
+    return this.send({ to: opts.to, subject, html });
+  }
+
+  // Existing — progress report delivery.
+  async sendReportDelivery(opts: ProgressReportOpts) {
+    const { subject, html } = progressReportEmail(opts);
+    return this.send({ to: opts.to, subject, html });
   }
 }

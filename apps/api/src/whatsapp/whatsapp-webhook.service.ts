@@ -14,7 +14,17 @@ export class WhatsAppWebhookService {
   verifySignature(rawBody: Buffer, signatureHeader: string | undefined): boolean {
     const secret = env.WHATSAPP_APP_SECRET;
     if (!secret) {
-      this.logger.warn('WHATSAPP_APP_SECRET not set — skipping signature verification. Set this env var to enable security.');
+      // In production this is unreachable — the env zod refine throws on boot.
+      // In dev/test we permit unsigned payloads so the local webhook tester works.
+      if (env.NODE_ENV === 'production') {
+        this.logger.error(
+          'WHATSAPP_APP_SECRET not configured in production — rejecting webhook. This is a fatal misconfiguration.',
+        );
+        return false;
+      }
+      this.logger.warn(
+        'WHATSAPP_APP_SECRET not set (dev/test only) — skipping signature verification. NEVER deploy without this set.',
+      );
       return true;
     }
     if (!signatureHeader?.startsWith('sha256=')) return false;

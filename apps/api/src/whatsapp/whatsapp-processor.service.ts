@@ -7,6 +7,7 @@ import {
   ProcessingStatus,
   MessageDirection,
   ProjectStatus,
+  UserRole,
 } from '@prisma/client';
 import { PrismaService } from '../prisma.module';
 import { env } from '../config/env';
@@ -69,11 +70,17 @@ export class WhatsAppProcessorService {
     const whatsappMsgId = msg.id;
     this.logger.log(`Processing inbound message id=${whatsappMsgId} type=${msg.type} from=${fromPhone}`);
 
+    // Only short-circuit on terminal states. PROCESSING/PENDING means a previous attempt
+    // crashed mid-flight; let the retry proceed and we'll UPDATE the row instead of INSERT.
     const existing = await this.prisma.whatsappMessage.findUnique({
       where: { whatsappMsgId },
     });
-    if (existing) {
-      this.logger.warn(`Duplicate message ${whatsappMsgId} — skipping`);
+    if (
+      existing &&
+      (existing.processingStatus === ProcessingStatus.COMPLETED ||
+        existing.processingStatus === ProcessingStatus.FAILED)
+    ) {
+      this.logger.warn(`Message ${whatsappMsgId} already in terminal state ${existing.processingStatus} — skipping`);
       return;
     }
 
@@ -82,8 +89,9 @@ export class WhatsAppProcessorService {
 
     const user = await this.findUserByPhone(fromPhone);
     if (!user) {
-      await this.prisma.whatsappMessage.create({
-        data: {
+      await this.prisma.whatsappMessage.upsert({
+        where: { whatsappMsgId },
+        create: {
           direction: MessageDirection.INBOUND,
           whatsappMsgId,
           fromPhone,
@@ -98,6 +106,11 @@ export class WhatsAppProcessorService {
           processedAt: new Date(),
           classifiedAs: 'unknown_sender',
         },
+        update: {
+          processingStatus: ProcessingStatus.COMPLETED,
+          processedAt: new Date(),
+          classifiedAs: 'unknown_sender',
+        },
       });
       await this.safeReply(
         fromPhone,
@@ -108,8 +121,9 @@ export class WhatsAppProcessorService {
 
     const project = await this.resolveProject(user.tenantId, user.id, textBody);
     if (!project) {
-      await this.prisma.whatsappMessage.create({
-        data: {
+      await this.prisma.whatsappMessage.upsert({
+        where: { whatsappMsgId },
+        create: {
           tenantId: user.tenantId,
           direction: MessageDirection.INBOUND,
           whatsappMsgId,
@@ -126,6 +140,13 @@ export class WhatsAppProcessorService {
           processedAt: new Date(),
           classifiedAs: 'no_project',
         },
+        update: {
+          tenantId: user.tenantId,
+          senderId: user.id,
+          processingStatus: ProcessingStatus.COMPLETED,
+          processedAt: new Date(),
+          classifiedAs: 'no_project',
+        },
       });
       await this.safeReply(
         fromPhone,
@@ -137,55 +158,80 @@ export class WhatsAppProcessorService {
     const combinedText = [textBody, publicMedia?.transcription].filter(Boolean).join('\n').trim();
     const classification = await this.openai.classify(combinedText || textBody || '');
 
-    let wmId: string;
+    // Use upsert so retries on a stuck PROCESSING row update in place rather than
+    // hitting the @unique whatsappMsgId constraint.
+    const row = await this.prisma.whatsappMessage.upsert({
+      where: { whatsappMsgId },
+      create: {
+        tenantId: user.tenantId,
+        projectId: project.id,
+        direction: MessageDirection.INBOUND,
+        whatsappMsgId,
+        fromPhone,
+        toPhone: normalizePhone(toPhone) || 'unknown',
+        messageType,
+        textContent: textBody,
+        mediaUrl: publicMedia?.publicUrl ?? null,
+        mediaType: publicMedia?.mimeType ?? null,
+        transcription: publicMedia?.transcription ?? null,
+        senderId: user.id,
+        processingStatus: ProcessingStatus.PROCESSING,
+        receivedAt: new Date(Number(msg.timestamp) * 1000),
+        classifiedAs: classification.intent,
+        extractedData: classification as unknown as Prisma.InputJsonValue,
+      },
+      update: {
+        tenantId: user.tenantId,
+        projectId: project.id,
+        senderId: user.id,
+        processingStatus: ProcessingStatus.PROCESSING,
+        classifiedAs: classification.intent,
+        extractedData: classification as unknown as Prisma.InputJsonValue,
+      },
+    });
+    const wmId = row.id;
+
     try {
-      const row = await this.prisma.whatsappMessage.create({
-        data: {
-          tenantId: user.tenantId,
-          projectId: project.id,
-          direction: MessageDirection.INBOUND,
-          whatsappMsgId,
-          fromPhone,
-          toPhone: normalizePhone(toPhone) || 'unknown',
-          messageType,
-          textContent: textBody,
-          mediaUrl: publicMedia?.publicUrl ?? null,
-          mediaType: publicMedia?.mimeType ?? null,
-          transcription: publicMedia?.transcription ?? null,
-          senderId: user.id,
-          processingStatus: ProcessingStatus.PROCESSING,
-          receivedAt: new Date(Number(msg.timestamp) * 1000),
-          classifiedAs: classification.intent,
-          extractedData: classification as unknown as Prisma.InputJsonValue,
-        },
+      await this.applyIntent({
+        tenantId: user.tenantId,
+        projectId: project.id,
+        projectCode: project.code,
+        userId: user.id,
+        userName: user.name ?? null,
+        messageType,
+        textBody: combinedText || textBody || '',
+        classification,
+        rawMessageId: wmId,
+        media: publicMedia,
       });
-      wmId = row.id;
-    } catch (e: unknown) {
-      const code = e && typeof e === 'object' && 'code' in e ? (e as { code: string }).code : '';
-      if (code === 'P2002') return;
-      throw e;
+
+      await this.prisma.whatsappMessage.update({
+        where: { id: wmId },
+        data: { processingStatus: ProcessingStatus.COMPLETED, processedAt: new Date() },
+      });
+
+      const summary = classification.summary ?? combinedText.slice(0, 120) ?? 'Received';
+      this.logger.log(`Message ${whatsappMsgId} processed — intent=${classification.intent}, project=${project.code}`);
+      await this.safeReply(fromPhone, `✅ Logged to ${project.code} — ${summary}`);
+    } catch (err) {
+      this.logger.error(`Message ${whatsappMsgId} processing failed`, err);
+      await this.prisma.whatsappMessage
+        .update({
+          where: { id: wmId },
+          data: { processingStatus: ProcessingStatus.FAILED, processedAt: new Date() },
+        })
+        .catch((e) => this.logger.warn(`Failed to mark message FAILED: ${e}`));
+
+      // Always reply, even on failure — never leave the user wondering. Duplicates from
+      // pg-boss retries are acceptable; for tighter UX, configure pg-boss retry options
+      // in whatsapp-worker.registrar so this only fires after final retry exhaustion.
+      await this.safeReply(
+        fromPhone,
+        "Sorry — we couldn't process your last message. Please try again, or contact your project manager.",
+      );
+
+      throw err; // rethrow so pg-boss records the failure and applies its retry policy
     }
-
-    await this.applyIntent({
-      tenantId: user.tenantId,
-      projectId: project.id,
-      projectCode: project.code,
-      userId: user.id,
-      messageType,
-      textBody: combinedText || textBody || '',
-      classification,
-      rawMessageId: wmId,
-      media: publicMedia,
-    });
-
-    await this.prisma.whatsappMessage.update({
-      where: { id: wmId },
-      data: { processingStatus: ProcessingStatus.COMPLETED, processedAt: new Date() },
-    });
-
-    const summary = classification.summary ?? combinedText.slice(0, 120) ?? 'Received';
-    this.logger.log(`Message ${whatsappMsgId} processed — intent=${classification.intent}, project=${project.code}`);
-    await this.safeReply(fromPhone, `✅ Logged to ${project.code} — ${summary}`);
   }
 
   private async extractContent(msg: WhatsAppInboundMessage): Promise<{
@@ -354,79 +400,155 @@ export class WhatsAppProcessorService {
     projectId: string;
     projectCode: string;
     userId: string;
+    userName: string | null;
     messageType: MessageType;
     textBody: string;
     classification: Classification;
     rawMessageId: string;
     media: PublicMedia | null;
   }): Promise<void> {
-    const { tenantId, projectId, userId, messageType, textBody, classification, rawMessageId, media } = args;
+    const {
+      tenantId,
+      projectId,
+      projectCode,
+      userId,
+      userName,
+      messageType,
+      textBody,
+      classification,
+      rawMessageId,
+      media,
+    } = args;
     const intent = classification.intent;
     const now = new Date();
 
-    if (intent === 'cost_entry' && classification.amount != null && classification.amount > 0) {
-      await this.prisma.costEntry.create({
-        data: {
-          projectId,
-          tenantId,
-          source: CostSource.WHATSAPP_AI,
-          status: CostStatus.PENDING_CONFIRMATION,
-          description: classification.summary ?? textBody.slice(0, 500),
-          category: this.openai.mapCategory(classification.category),
-          currency: this.openai.mapCurrency(classification.currency),
-          amount: new Prisma.Decimal(classification.amount),
-          loggedById: userId,
-          rawMessageId,
-        },
-      });
-    }
+    // Collect side-effects to run AFTER the transaction commits, so we never send
+    // a WhatsApp/notification for data that ultimately rolled back.
+    type PostCommitNotice = {
+      pmPhones: string[];
+      whatsappBody: string;
+    };
 
-    if (intent === 'attendance') {
-      const wc = classification.workerCount ?? 1;
-      await this.prisma.attendanceLog.create({
-        data: {
-          projectId,
-          tenantId,
-          logDate: now,
-          workerCount: wc,
-          reportedById: userId,
-          rawMessageId,
-        },
-      });
-    }
+    const postCommit = await this.prisma.$transaction<PostCommitNotice | null>(async (tx) => {
+      let createdCost: { id: string; amount: Prisma.Decimal; currency: string } | null = null;
 
-    if (
-      intent === 'site_update' ||
-      intent === 'incident' ||
-      intent === 'question' ||
-      intent === 'material_delivery' ||
-      intent === 'unclassified' ||
-      intent === 'cost_entry'
-    ) {
-      const log = await this.prisma.dailyLog.create({
-        data: {
-          projectId,
-          tenantId,
-          logDate: now,
-          submittedById: userId,
-          rawContent: textBody.slice(0, 20_000),
-          aiSummary: classification.summary ?? null,
-          activities: [],
-          incidents: intent === 'incident' ? [textBody.slice(0, 500)] : [],
-          source: messageType,
-          rawMessageId,
-        },
-      });
-
-      if (messageType === MessageType.IMAGE && media?.publicUrl) {
-        await this.prisma.dailyLogPhoto.create({
+      if (intent === 'cost_entry' && classification.amount != null && classification.amount > 0) {
+        createdCost = await tx.costEntry.create({
           data: {
-            dailyLogId: log.id,
-            storageUrl: media.publicUrl,
-            caption: null,
+            projectId,
+            tenantId,
+            source: CostSource.WHATSAPP_AI,
+            status: CostStatus.PENDING_CONFIRMATION,
+            description: classification.summary ?? textBody.slice(0, 500),
+            category: this.openai.mapCategory(classification.category),
+            currency: this.openai.mapCurrency(classification.currency),
+            amount: new Prisma.Decimal(classification.amount),
+            loggedById: userId,
+            rawMessageId,
+          },
+          select: { id: true, amount: true, currency: true },
+        });
+      }
+
+      if (intent === 'attendance') {
+        const wc = classification.workerCount ?? 1;
+        await tx.attendanceLog.create({
+          data: {
+            projectId,
+            tenantId,
+            logDate: now,
+            workerCount: wc,
+            reportedById: userId,
+            rawMessageId,
           },
         });
       }
+
+      if (
+        intent === 'site_update' ||
+        intent === 'incident' ||
+        intent === 'question' ||
+        intent === 'material_delivery' ||
+        intent === 'unclassified' ||
+        intent === 'cost_entry'
+      ) {
+        const log = await tx.dailyLog.create({
+          data: {
+            projectId,
+            tenantId,
+            logDate: now,
+            submittedById: userId,
+            rawContent: textBody.slice(0, 20_000),
+            aiSummary: classification.summary ?? null,
+            activities: [],
+            incidents: intent === 'incident' ? [textBody.slice(0, 500)] : [],
+            source: messageType,
+            rawMessageId,
+          },
+        });
+
+        if (messageType === MessageType.IMAGE && media?.publicUrl) {
+          await tx.dailyLogPhoto.create({
+            data: {
+              dailyLogId: log.id,
+              storageUrl: media.publicUrl,
+              caption: null,
+            },
+          });
+        }
+      }
+
+      // PM notification on WhatsApp cost submission — write Notification rows inside
+      // the transaction so they roll back with the cost. WhatsApp send happens after commit.
+      if (!createdCost) return null;
+
+      const pms = await tx.user.findMany({
+        where: {
+          tenantId,
+          isActive: true,
+          deletedAt: null,
+          role: { in: [UserRole.OWNER, UserRole.PROJECT_MANAGER] },
+        },
+        select: { id: true, whatsappPhone: true },
+      });
+
+      const submitterName = userName ?? 'A team member';
+      const amount = Number(createdCost.amount).toLocaleString(undefined, { maximumFractionDigits: 2 });
+      const currency = createdCost.currency;
+      const summary = classification.summary ?? textBody.slice(0, 120);
+      const title = `New cost on ${projectCode}: ${currency} ${amount}`;
+      const body = `${submitterName} submitted ${currency} ${amount} (${summary}) — pending confirmation.`;
+      const whatsappBody = `${projectCode}: ${currency} ${amount} ${summary} submitted by ${submitterName}. Open BuildOS dashboard to confirm or reject.`;
+
+      if (pms.length) {
+        await tx.notification.createMany({
+          data: pms.map((pm) => ({
+            tenantId,
+            userId: pm.id,
+            type: 'cost.submitted',
+            title,
+            body,
+            link: `/projects/${projectId}/costs`,
+          })),
+        });
+      }
+
+      return {
+        pmPhones: [...new Set(pms.map((pm) => pm.whatsappPhone).filter(Boolean) as string[])],
+        whatsappBody,
+      };
+    });
+
+    if (postCommit && postCommit.pmPhones.length) {
+      const phones = postCommit.pmPhones;
+      const whatsappBody = postCommit.whatsappBody;
+      void Promise.allSettled(
+        phones.map((phone: string) =>
+          this.cloud.sendTextMessage(phone, whatsappBody).catch((e) => {
+            this.logger.warn(`PM cost-submission notify failed for ${phone}: ${e}`);
+          }),
+        ),
+      );
     }
   }
 
