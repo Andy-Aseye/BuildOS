@@ -52,27 +52,12 @@ const envSchema = z
   .superRefine((cfg, ctx) => {
     if (cfg.NODE_ENV !== 'production') return;
 
-    // WhatsApp signature verification is mandatory ONLY when WhatsApp is
-    // actively wired up in production. If none of the WhatsApp send/receive
-    // env vars are set, the integration is dormant: the runtime webhook
-    // handler in whatsapp-webhook.service.ts already rejects every unsigned
-    // payload in production, so there is no exposure to gate at boot time.
-    //
-    // The moment any WhatsApp var is set (access token, phone id, verify
-    // token), this check re-engages and refuses to start without APP_SECRET
-    // — that is the dangerous state we still need to prevent.
-    const whatsappConfigured =
-      cfg.WHATSAPP_ACCESS_TOKEN || cfg.WHATSAPP_PHONE_NUMBER_ID || cfg.WHATSAPP_VERIFY_TOKEN;
-
-    if (whatsappConfigured && !cfg.WHATSAPP_APP_SECRET) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['WHATSAPP_APP_SECRET'],
-        message:
-          'WHATSAPP_APP_SECRET is required when any other WHATSAPP_* var is set in production. ' +
-          'The webhook would otherwise reject all inbound messages.',
-      });
-    }
+    // WhatsApp signature verification is enforced at runtime in
+    // whatsapp-webhook.service.ts, which rejects every unsigned payload in
+    // production. We deliberately do NOT block boot on WHATSAPP_APP_SECRET:
+    // when it's missing, the webhook is dormant (all inbound 401s) but the
+    // rest of the API still serves traffic. Add the secret in the host env
+    // when you're ready to enable inbound WhatsApp.
 
     if (!cfg.RESEND_API_KEY) {
       ctx.addIssue({
