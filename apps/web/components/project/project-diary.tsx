@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { formatDate } from '@/lib/format';
+import { formatDateOnly } from '@/lib/format';
 import { useDiary, useCreateDiaryEntry } from '@/lib/hooks/use-project-queries';
 import { usePagination } from '@/lib/hooks/use-pagination';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -45,7 +45,7 @@ export function ProjectDiary({ projectId }: { projectId: string }) {
     try {
       await createEntry.mutateAsync({
         rawContent: rawContent.trim(),
-        logDate,
+        logDate: logDate + 'T00:00:00',
         weather: weather || undefined,
         activities: activities.trim() ? activities.split('\n').map((a) => a.trim()).filter(Boolean) : undefined,
         incidents: incidents.trim() ? incidents.split('\n').map((i) => i.trim()).filter(Boolean) : undefined,
@@ -180,7 +180,7 @@ export function ProjectDiary({ projectId }: { projectId: string }) {
                     </div>
                     <div>
                       <p className="text-sm font-medium text-[var(--text-primary)]">{row.submittedBy.name ?? 'Unknown'}</p>
-                      <p className="text-xs text-[var(--text-muted)]">{formatDate(row.logDate)} &middot; {row.source}</p>
+                      <p className="text-xs text-[var(--text-muted)]">{formatDateOnly(row.logDate)} &middot; {row.source}</p>
                     </div>
                   </div>
                   {row.aiSummary && (
