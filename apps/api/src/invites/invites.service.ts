@@ -5,6 +5,7 @@ import {
   ConflictException,
   ForbiddenException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { UserRole } from '@prisma/client';
 import { PrismaService } from '../prisma.module';
 import { EmailService } from '../email/email.service';
@@ -37,26 +38,40 @@ export class InvitesService {
     const pendingInvite = await this.prisma.invite.findFirst({
       where: { email: data.email, tenantId, acceptedAt: null, expiresAt: { gt: new Date() } },
     });
-    if (pendingInvite) throw new ConflictException('An active invite already exists for this email');
 
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 7);
 
-    const invite = await this.prisma.invite.create({
-      data: {
-        tenantId,
-        email: data.email,
-        name: data.name,
-        phone: data.phone || null,
-        role: data.role as UserRole,
-        invitedById,
-        expiresAt,
-      },
-      include: {
-        tenant: { select: { name: true } },
-        invitedBy: { select: { name: true } },
-      },
-    });
+    const include = {
+      tenant: { select: { name: true } },
+      invitedBy: { select: { name: true } },
+    } as const;
+
+    const invite = pendingInvite
+      ? await this.prisma.invite.update({
+          where: { id: pendingInvite.id },
+          data: {
+            token: randomUUID(),
+            expiresAt,
+            name: data.name,
+            phone: data.phone || null,
+            role: data.role as UserRole,
+            invitedById,
+          },
+          include,
+        })
+      : await this.prisma.invite.create({
+          data: {
+            tenantId,
+            email: data.email,
+            name: data.name,
+            phone: data.phone || null,
+            role: data.role as UserRole,
+            invitedById,
+            expiresAt,
+          },
+          include,
+        });
 
     if (this.email.enabled) {
       const inviteUrl = `${env.FRONTEND_URL}/invite/${invite.token}`;
