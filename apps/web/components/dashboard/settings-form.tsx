@@ -109,7 +109,7 @@ export function SettingsForm() {
               </svg>
             </div>
             <div className="flex-1">
-              <p className="text-sm font-medium text-[var(--text-primary)]">Meta WhatsApp Cloud API</p>
+              <p className="text-sm font-medium text-[var(--text-primary)]">Twilio WhatsApp Integration</p>
               <p className="text-xs text-[var(--text-muted)] mt-0.5">
                 Field workers can send diary updates, attendance reports, and cost logs via WhatsApp.
                 The system uses AI to classify and store messages automatically.
@@ -121,8 +121,8 @@ export function SettingsForm() {
             <h4 className="text-sm font-medium text-[var(--text-secondary)]">How it works</h4>
             <div className="grid gap-3">
               {[
-                { step: '1', title: 'Configure webhook', desc: 'Point your Meta App webhook to your API endpoint: POST /webhooks/whatsapp' },
-                { step: '2', title: 'Set environment variables', desc: 'WHATSAPP_TOKEN, WHATSAPP_PHONE_ID, WHATSAPP_VERIFY_TOKEN, WHATSAPP_APP_SECRET' },
+                { step: '1', title: 'Configure webhook', desc: 'Point your Twilio WhatsApp webhook to your API endpoint: POST /webhooks/whatsapp' },
+                { step: '2', title: 'Set environment variables', desc: 'TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM' },
                 { step: '3', title: 'Add team phone numbers', desc: 'Ensure team members have their WhatsApp phone numbers set in their profiles' },
                 { step: '4', title: 'Start receiving data', desc: 'Messages are classified by AI into diary entries, attendance logs, or cost entries' },
               ].map((item) => (
@@ -142,7 +142,7 @@ export function SettingsForm() {
           <div className="rounded-xl bg-blue-50 border border-blue-200 p-3">
             <p className="text-xs text-blue-700">
               <span className="font-semibold">Required env variables:</span>{' '}
-              WHATSAPP_TOKEN, WHATSAPP_PHONE_ID, WHATSAPP_VERIFY_TOKEN, WHATSAPP_APP_SECRET, WHATSAPP_MEDIA_BUCKET.
+              TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM, WHATSAPP_MEDIA_BUCKET.
               Set these in your API server environment to enable WhatsApp integration.
             </p>
           </div>

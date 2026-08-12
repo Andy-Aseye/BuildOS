@@ -1,41 +1,29 @@
-/** Meta WhatsApp Cloud API webhook payload (messages field only). */
-
-export type WhatsAppWebhookPayload = {
-  object?: string;
-  entry?: WhatsAppEntry[];
+export type WhatsAppWebhookPayload = Record<string, string | undefined> & {
+  AccountSid?: string;
+  SmsSid?: string;
+  SmsMessageSid?: string;
+  MessageSid?: string;
+  From?: string;
+  To?: string;
+  Body?: string;
+  NumMedia?: string;
+  Timestamp?: string;
+  [key: string]: string | undefined;
 };
 
-export type WhatsAppEntry = {
-  id?: string;
-  changes?: WhatsAppChange[];
+export type TwilioMediaItem = {
+  url: string;
+  contentType?: string;
 };
 
-export type WhatsAppChange = {
-  field?: string;
-  value?: WhatsAppChangeValue;
-};
-
-export type WhatsAppChangeValue = {
-  messaging_product?: string;
-  metadata?: {
-    display_phone_number?: string;
-    phone_number_id?: string;
-  };
-  contacts?: { profile?: { name?: string }; wa_id?: string }[];
-  messages?: WhatsAppInboundMessage[];
-  statuses?: unknown[];
-};
-
-export type WhatsAppInboundMessage = {
+export type TwilioInboundMessage = {
   from: string;
+  to: string;
   id: string;
   timestamp: string;
-  type: string;
-  text?: { body: string };
-  image?: { id: string; mime_type?: string; sha256?: string; caption?: string };
-  audio?: { id: string; mime_type?: string; voice?: boolean };
-  video?: { id: string; mime_type?: string };
-  document?: { id: string; mime_type?: string; filename?: string };
+  body: string | null;
+  numMedia: number;
+  media: TwilioMediaItem[];
 };
 
 export type WhatsAppInboundJobData = {

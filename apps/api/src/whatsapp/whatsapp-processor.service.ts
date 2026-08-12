@@ -15,7 +15,7 @@ import { supabaseAdmin } from '../auth/supabase';
 import { WhatsAppCloudService } from './whatsapp-cloud.service';
 import { WhatsAppOpenAiService } from './whatsapp-openai.service';
 import type { Classification } from './whatsapp-openai.service';
-import type { WhatsAppInboundMessage, WhatsAppWebhookPayload } from './whatsapp.types';
+import type { TwilioInboundMessage, WhatsAppWebhookPayload } from './whatsapp.types';
 
 const CODE_IN_TEXT = /(?:^|\s)#([A-Za-z0-9]+-[A-Za-z0-9]+)/;
 
@@ -40,35 +40,41 @@ export class WhatsAppProcessorService {
   ) {}
 
   async processWebhookPayload(payload: WhatsAppWebhookPayload): Promise<void> {
-    const entries = payload.entry ?? [];
-    this.logger.log(`processWebhookPayload — ${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}`);
-    for (const entry of entries) {
-      for (const change of entry.changes ?? []) {
-        if (change.field !== 'messages') {
-          this.logger.debug(`Skipping change with field="${change.field}"`);
-          continue;
-        }
-        const value = change.value;
-        const messages = value?.messages ?? [];
-        const phoneNumberId = value?.metadata?.phone_number_id;
-        const toPhone = value?.metadata?.display_phone_number ?? phoneNumberId ?? '';
-
-        this.logger.log(`Processing ${messages.length} message(s) for phoneNumberId=${phoneNumberId ?? 'unknown'}`);
-        for (const msg of messages) {
-          try {
-            await this.processOneInbound(msg, toPhone);
-          } catch (e) {
-            this.logger.error(`Message ${msg.id} failed`, e);
-          }
-        }
-      }
+    const message = this.parseTwilioPayload(payload);
+    this.logger.log(`processWebhookPayload — twilio message id=${message.id} from=${message.from} numMedia=${message.numMedia}`);
+    try {
+      await this.processOneInbound(message);
+    } catch (e) {
+      this.logger.error(`Message ${message.id} failed`, e);
     }
   }
 
-  private async processOneInbound(msg: WhatsAppInboundMessage, toPhone: string): Promise<void> {
+  private parseTwilioPayload(payload: WhatsAppWebhookPayload): TwilioInboundMessage {
+    const numMedia = Number(payload.NumMedia ?? '0') || 0;
+    const media = [] as { url: string; contentType?: string }[];
+    for (let i = 0; i < numMedia; i += 1) {
+      const url = payload[`MediaUrl${i}`];
+      const contentType = payload[`MediaContentType${i}`];
+      if (url) {
+        media.push({ url, contentType });
+      }
+    }
+
+    return {
+      from: payload.From ?? '',
+      to: payload.To ?? '',
+      id: payload.MessageSid ?? payload.SmsMessageSid ?? payload.SmsSid ?? 'unknown',
+      timestamp: payload.Timestamp ?? `${Math.floor(Date.now() / 1000)}`,
+      body: payload.Body ?? null,
+      numMedia,
+      media,
+    };
+  }
+
+  private async processOneInbound(msg: TwilioInboundMessage): Promise<void> {
     const fromPhone = normalizePhone(msg.from);
     const whatsappMsgId = msg.id;
-    this.logger.log(`Processing inbound message id=${whatsappMsgId} type=${msg.type} from=${fromPhone}`);
+    this.logger.log(`Processing inbound message id=${whatsappMsgId} from=${fromPhone}`);
 
     // Only short-circuit on terminal states. PROCESSING/PENDING means a previous attempt
     // crashed mid-flight; let the retry proceed and we'll UPDATE the row instead of INSERT.
@@ -95,7 +101,7 @@ export class WhatsAppProcessorService {
           direction: MessageDirection.INBOUND,
           whatsappMsgId,
           fromPhone,
-          toPhone: normalizePhone(toPhone) || 'unknown',
+          toPhone: normalizePhone(msg.to) || 'unknown',
           messageType,
           textContent: textBody,
           mediaUrl: publicMedia?.publicUrl ?? null,
@@ -128,7 +134,7 @@ export class WhatsAppProcessorService {
           direction: MessageDirection.INBOUND,
           whatsappMsgId,
           fromPhone,
-          toPhone: normalizePhone(toPhone) || 'unknown',
+          toPhone: normalizePhone(msg.to) || 'unknown',
           messageType,
           textContent: textBody,
           mediaUrl: publicMedia?.publicUrl ?? null,
@@ -168,7 +174,7 @@ export class WhatsAppProcessorService {
         direction: MessageDirection.INBOUND,
         whatsappMsgId,
         fromPhone,
-        toPhone: normalizePhone(toPhone) || 'unknown',
+        toPhone: normalizePhone(msg.to) || 'unknown',
         messageType,
         textContent: textBody,
         mediaUrl: publicMedia?.publicUrl ?? null,
@@ -222,7 +228,7 @@ export class WhatsAppProcessorService {
         })
         .catch((e) => this.logger.warn(`Failed to mark message FAILED: ${e}`));
 
-      // Always reply, even on failure — never leave the user wondering. Duplicates from
+      // Always reply, even on failure. Duplicates from
       // pg-boss retries are acceptable; for tighter UX, configure pg-boss retry options
       // in whatsapp-worker.registrar so this only fires after final retry exhaustion.
       await this.safeReply(
@@ -234,32 +240,32 @@ export class WhatsAppProcessorService {
     }
   }
 
-  private async extractContent(msg: WhatsAppInboundMessage): Promise<{
+  private async extractContent(msg: TwilioInboundMessage): Promise<{
     messageType: MessageType;
     textBody: string | null;
     publicMedia: PublicMedia | null;
   }> {
-    const t = msg.type;
-    if (t === 'text') {
-      return { messageType: MessageType.TEXT, textBody: msg.text?.body ?? null, publicMedia: null };
+    const textBody = msg.body ?? null;
+    if (msg.media.length === 0) {
+      return { messageType: MessageType.TEXT, textBody, publicMedia: null };
     }
-    if (t === 'image') {
-      const stored = await this.downloadAndStoreMedia(msg.image?.id, msg.image?.mime_type, 'jpg');
-      return {
-        messageType: MessageType.IMAGE,
-        textBody: msg.image?.caption ?? null,
-        publicMedia: stored ? this.toPublicMedia(stored) : null,
-      };
-    }
-    if (t === 'audio') {
-      const stored = await this.downloadAndStoreMedia(msg.audio?.id, msg.audio?.mime_type, 'ogg');
+
+    const primaryMedia = msg.media[0];
+    const mediaType = primaryMedia.contentType?.toLowerCase() ?? '';
+    const isImage = mediaType.startsWith('image/');
+    const isAudio = mediaType.startsWith('audio/');
+    const isVideo = mediaType.startsWith('video/');
+    const ext = isAudio ? 'ogg' : isVideo ? 'mp4' : isImage ? 'jpg' : 'bin';
+    const stored = await this.downloadAndStoreMediaUrl(primaryMedia.url, primaryMedia.contentType, ext);
+
+    if (isAudio) {
       if (!stored) {
-        return { messageType: MessageType.VOICE_NOTE, textBody: null, publicMedia: null };
+        return { messageType: MessageType.VOICE_NOTE, textBody, publicMedia: null };
       }
       const transcription = await this.openai.transcribeAudio(stored.buffer, 'voice.ogg');
       return {
         messageType: MessageType.VOICE_NOTE,
-        textBody: null,
+        textBody,
         publicMedia: {
           publicUrl: stored.publicUrl,
           mimeType: stored.mimeType,
@@ -267,16 +273,64 @@ export class WhatsAppProcessorService {
         },
       };
     }
-    if (t === 'video') {
-      const stored = await this.downloadAndStoreMedia(msg.video?.id, msg.video?.mime_type, 'mp4');
-      return { messageType: MessageType.VIDEO, textBody: null, publicMedia: stored ? this.toPublicMedia(stored) : null };
-    }
-    if (t === 'document') {
-      const stored = await this.downloadAndStoreMedia(msg.document?.id, msg.document?.mime_type, 'bin');
-      return { messageType: MessageType.DOCUMENT, textBody: null, publicMedia: stored ? this.toPublicMedia(stored) : null };
+
+    if (isImage) {
+      return {
+        messageType: MessageType.IMAGE,
+        textBody,
+        publicMedia: stored ? this.toPublicMedia(stored) : null,
+      };
     }
 
-    return { messageType: MessageType.TEXT, textBody: JSON.stringify(msg).slice(0, 2000), publicMedia: null };
+    if (isVideo) {
+      return {
+        messageType: MessageType.VIDEO,
+        textBody,
+        publicMedia: stored ? this.toPublicMedia(stored) : null,
+      };
+    }
+
+    return {
+      messageType: MessageType.DOCUMENT,
+      textBody,
+      publicMedia: stored ? this.toPublicMedia(stored) : null,
+    };
+  }
+
+  private async downloadAndStoreMediaUrl(
+    url: string,
+    mimeType: string | undefined,
+    ext: string,
+  ): Promise<null | { publicUrl: string | null; mimeType: string | null; transcription: string | null; buffer: Buffer }> {
+    if (!url) return null;
+    try {
+      const buffer = await this.cloud.downloadMediaFromUrl(url);
+      const bucket = env.WHATSAPP_MEDIA_BUCKET ?? 'whatsapp-media';
+      const path = `inbound/${encodeURIComponent(url)}.${ext}`;
+      const { error } = await supabaseAdmin.storage.from(bucket).upload(path, buffer, {
+        contentType: mimeType ?? 'application/octet-stream',
+        upsert: true,
+      });
+      if (error) {
+        this.logger.warn(`Supabase upload skipped (${bucket}): ${error.message}`);
+        return {
+          publicUrl: null,
+          mimeType: mimeType ?? null,
+          transcription: null,
+          buffer,
+        };
+      }
+      const { data } = supabaseAdmin.storage.from(bucket).getPublicUrl(path);
+      return {
+        publicUrl: data.publicUrl,
+        mimeType: mimeType ?? null,
+        transcription: null,
+        buffer,
+      };
+    } catch (e) {
+      this.logger.error('downloadAndStoreMediaUrl failed', e);
+      return null;
+    }
   }
 
   private toPublicMedia(stored: {
@@ -291,47 +345,6 @@ export class WhatsAppProcessorService {
     };
   }
 
-  private async downloadAndStoreMedia(
-    mediaId: string | undefined,
-    mimeType: string | undefined,
-    ext: string,
-  ): Promise<null | {
-    publicUrl: string | null;
-    mimeType: string | null;
-    transcription: null;
-    buffer: Buffer;
-  }> {
-    if (!mediaId) return null;
-    try {
-      const meta = await this.cloud.getMediaUrl(mediaId);
-      const buffer = await this.cloud.downloadMediaFromUrl(meta.url);
-      const bucket = env.WHATSAPP_MEDIA_BUCKET ?? 'whatsapp-media';
-      const path = `inbound/${mediaId}.${ext}`;
-      const { error } = await supabaseAdmin.storage.from(bucket).upload(path, buffer, {
-        contentType: mimeType ?? 'application/octet-stream',
-        upsert: true,
-      });
-      if (error) {
-        this.logger.warn(`Supabase upload skipped (${bucket}): ${error.message}`);
-        return {
-          publicUrl: null,
-          mimeType: mimeType ?? meta.mime_type ?? null,
-          transcription: null,
-          buffer,
-        };
-      }
-      const { data } = supabaseAdmin.storage.from(bucket).getPublicUrl(path);
-      return {
-        publicUrl: data.publicUrl,
-        mimeType: mimeType ?? meta.mime_type ?? null,
-        transcription: null,
-        buffer,
-      };
-    } catch (e) {
-      this.logger.error('downloadAndStoreMedia failed', e);
-      return null;
-    }
-  }
 
   private async findUserByPhone(digits: string) {
     const withPlus = digits.startsWith('0') ? digits : `+${digits}`;

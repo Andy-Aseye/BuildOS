@@ -27,6 +27,9 @@ const envSchema = z
     BUILDOS_AIQUERY_DATABASE_URL: z.string().min(1).optional(),
     SUPABASE_URL: z.string().url(),
     SUPABASE_SERVICE_ROLE_KEY: z.string().min(1),
+    TWILIO_ACCOUNT_SID: z.string().min(1).optional(),
+    TWILIO_AUTH_TOKEN: z.string().min(1).optional(),
+    TWILIO_WHATSAPP_FROM: z.string().min(1).optional(),
     WHATSAPP_ACCESS_TOKEN: z.string().min(1).optional(),
     WHATSAPP_PHONE_NUMBER_ID: z.string().min(1).optional(),
     WHATSAPP_VERIFY_TOKEN: z.string().min(1).optional(),
@@ -79,3 +82,6 @@ const envSchema = z
 
 export const env = envSchema.parse(process.env);
 export type Env = z.infer<typeof envSchema>;
+
+
+
