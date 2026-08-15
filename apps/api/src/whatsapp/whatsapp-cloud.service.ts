@@ -5,13 +5,17 @@ import { env } from '../config/env';
 @Injectable()
 export class WhatsAppCloudService {
   private readonly logger = new Logger(WhatsAppCloudService.name);
-  private readonly client: Twilio;
+  private readonly client: Twilio | null;
 
   constructor() {
     const accountSid = env.TWILIO_ACCOUNT_SID;
     const authToken = env.TWILIO_AUTH_TOKEN;
     if (!accountSid || !authToken) {
-      throw new Error('TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN must be configured');
+      // WhatsApp is optional. Do not prevent the dashboard API from starting
+      // before the Twilio credentials have been configured.
+      this.logger.warn('Twilio credentials are not configured — WhatsApp sending is disabled');
+      this.client = null;
+      return;
     }
     this.client = new Twilio(accountSid, authToken);
   }
@@ -24,6 +28,7 @@ export class WhatsAppCloudService {
   async sendTextMessage(toPhoneDigits: string, body: string): Promise<void> {
     const fromValue = env.TWILIO_WHATSAPP_FROM;
     if (!fromValue) throw new Error('TWILIO_WHATSAPP_FROM not configured');
+    if (!this.client) throw new Error('TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN must be configured');
 
     const to = this.normalizeWhatsappNumber(toPhoneDigits);
     const from = fromValue.startsWith('whatsapp:') ? fromValue : this.normalizeWhatsappNumber(fromValue);

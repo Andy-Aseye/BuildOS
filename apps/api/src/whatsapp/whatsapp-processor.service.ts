@@ -14,6 +14,7 @@ import { env } from '../config/env';
 import { supabaseAdmin } from '../auth/supabase';
 import { WhatsAppCloudService } from './whatsapp-cloud.service';
 import { WhatsAppOpenAiService } from './whatsapp-openai.service';
+import { AiQueryService } from '../ai-query/ai-query.service';
 import type { Classification } from './whatsapp-openai.service';
 import type { TwilioInboundMessage, WhatsAppWebhookPayload } from './whatsapp.types';
 
@@ -37,6 +38,7 @@ export class WhatsAppProcessorService {
     private readonly prisma: PrismaService,
     private readonly cloud: WhatsAppCloudService,
     private readonly openai: WhatsAppOpenAiService,
+    private readonly aiQuery: AiQueryService,
   ) {}
 
   async processWebhookPayload(payload: WhatsAppWebhookPayload): Promise<void> {
@@ -125,6 +127,28 @@ export class WhatsAppProcessorService {
       return;
     }
 
+    const combinedText = [textBody, publicMedia?.transcription].filter(Boolean).join('\n').trim();
+    const classification = await this.openai.classify(combinedText || textBody || '');
+
+    // Questions use the same tenant-scoped assistant as the dashboard. A project
+    // code is not required because the assistant can query all permitted data in
+    // the sender's tenant.
+    if (classification.intent === 'question') {
+      await this.processAiQuestion({
+        whatsappMsgId,
+        fromPhone,
+        toPhone: normalizePhone(msg.to) || 'unknown',
+        receivedAt: new Date(Number(msg.timestamp) * 1000),
+        messageType,
+        textBody: combinedText || textBody || '',
+        publicMedia,
+        tenantId: user.tenantId,
+        userId: user.id,
+        userRole: user.role,
+      });
+      return;
+    }
+
     const project = await this.resolveProject(user.tenantId, user.id, textBody);
     if (!project) {
       await this.prisma.whatsappMessage.upsert({
@@ -160,9 +184,6 @@ export class WhatsAppProcessorService {
       );
       return;
     }
-
-    const combinedText = [textBody, publicMedia?.transcription].filter(Boolean).join('\n').trim();
-    const classification = await this.openai.classify(combinedText || textBody || '');
 
     // Use upsert so retries on a stuck PROCESSING row update in place rather than
     // hitting the @unique whatsappMsgId constraint.
@@ -406,6 +427,89 @@ export class WhatsAppProcessorService {
     }
 
     return null;
+  }
+
+  private async processAiQuestion(args: {
+    whatsappMsgId: string;
+    fromPhone: string;
+    toPhone: string;
+    receivedAt: Date;
+    messageType: MessageType;
+    textBody: string;
+    publicMedia: PublicMedia | null;
+    tenantId: string;
+    userId: string;
+    userRole: UserRole;
+  }): Promise<void> {
+    const {
+      whatsappMsgId,
+      fromPhone,
+      toPhone,
+      receivedAt,
+      messageType,
+      textBody,
+      publicMedia,
+      tenantId,
+      userId,
+      userRole,
+    } = args;
+
+    const row = await this.prisma.whatsappMessage.upsert({
+      where: { whatsappMsgId },
+      create: {
+        tenantId,
+        direction: MessageDirection.INBOUND,
+        whatsappMsgId,
+        fromPhone,
+        toPhone,
+        messageType,
+        textContent: textBody || null,
+        mediaUrl: publicMedia?.publicUrl ?? null,
+        mediaType: publicMedia?.mimeType ?? null,
+        transcription: publicMedia?.transcription ?? null,
+        senderId: userId,
+        processingStatus: ProcessingStatus.PROCESSING,
+        receivedAt,
+        classifiedAs: 'question',
+      },
+      update: {
+        tenantId,
+        senderId: userId,
+        processingStatus: ProcessingStatus.PROCESSING,
+        classifiedAs: 'question',
+      },
+    });
+
+    try {
+      if (userRole !== UserRole.OWNER && userRole !== UserRole.PROJECT_MANAGER) {
+        await this.safeReply(
+          fromPhone,
+          'The BuildOS AI assistant is available to owners and project managers. You can still send site updates, attendance, and costs here.',
+        );
+      } else if (!textBody.trim()) {
+        await this.safeReply(fromPhone, 'Please send your question as text, or include a voice note with a clear transcription.');
+      } else {
+        const { answer } = await this.aiQuery.query(tenantId, userId, textBody.trim());
+        await this.safeReply(fromPhone, answer);
+      }
+
+      await this.prisma.whatsappMessage.update({
+        where: { id: row.id },
+        data: { processingStatus: ProcessingStatus.COMPLETED, processedAt: new Date() },
+      });
+    } catch (err) {
+      await this.prisma.whatsappMessage
+        .update({
+          where: { id: row.id },
+          data: { processingStatus: ProcessingStatus.FAILED, processedAt: new Date() },
+        })
+        .catch((e) => this.logger.warn(`Failed to mark AI question FAILED: ${e}`));
+      await this.safeReply(
+        fromPhone,
+        "Sorry — I couldn't answer that question right now. Please try again shortly.",
+      );
+      throw err;
+    }
   }
 
   private async applyIntent(args: {
