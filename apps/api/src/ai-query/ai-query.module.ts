@@ -5,5 +5,6 @@ import { AiQueryService } from './ai-query.service';
 @Module({
   controllers: [AiQueryController],
   providers: [AiQueryService],
+  exports: [AiQueryService],
 })
 export class AiQueryModule {}
