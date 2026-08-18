@@ -13,6 +13,7 @@ async function bootstrap() {
 
   app.use(helmet());
 
+
   app.enableCors({
     origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
       const allowed = [
